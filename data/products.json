@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "currency": "EUR",
+  "products": [
+    {
+      "id": "pink-001",
+      "drop_id": "drop-01",
+      "name": "Zip Hoodie Pink 001",
+      "price_cents": 7500,
+      "tax_status": "to_confirm",
+      "price_source": "founder_approved",
+      "fit": "oversize",
+      "audience": "unisexe",
+      "gsm": 350,
+      "composition": [{"material": "coton", "percent": 80}, {"material": "polyester", "percent": 20}],
+      "zip": "YKK",
+      "lined_hood": true,
+      "colors": [{"id": "pastel-pink", "name": "Rose pastel", "hex": null}],
+      "sizes": ["S", "M", "L"],
+      "variants": [
+        {"sku": "ZH-PINK-S", "color_id": "pastel-pink", "size": "S"},
+        {"sku": "ZH-PINK-M", "color_id": "pastel-pink", "size": "M"},
+        {"sku": "ZH-PINK-L", "color_id": "pastel-pink", "size": "L"}
+      ],
+      "photos": [
+        {"src": "/store/assets/hoodie-front.webp", "alt": "Le zip hoodie rose SAYLESS de face"},
+        {"src": "/store/assets/hoodie-back.webp", "alt": "Le zip hoodie rose SAYLESS de dos"},
+        {"src": "/store/assets/campaign.webp", "alt": "Deux personnes portant le zip hoodie rose SAYLESS"}
+      ],
+      "care": null,
+      "country_of_manufacture": null,
+      "size_advice": "Modèle unisexe. Le S est recommandé aux personnes de petite taille ; le rendu reste oversize.",
+      "measurements_verified": false
+    }
+  ],
+  "shipping_reference": [
+    {"id": "relay", "price_cents": 490, "provider": null},
+    {"id": "home", "price_cents": 850, "provider": "Colissimo"}
+  ]
+}

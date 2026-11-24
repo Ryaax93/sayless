@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict');
+const {product,totals,validDetails,canConfirmDemo}=require('node:vm').runInNewContext(require('node:fs').readFileSync(new URL('../public/store/commerce.js','file://'+__filename),'utf8')+';module.exports',{module:{exports:{}}});
+const item=[{size:'M',quantity:1}];
+const details={name:'Client Exemple',email:'exemple@example.com',address:'10 rue Exemple',postcode:'75001',city:'Paris',country:'France'};
+assert.equal(product.priceCents,7500);
+assert.equal(Object.hasOwn(product,'stockTotal'),false,'Aucune quantité statique dans les données commerciales du navigateur');
+assert.equal(totals(item).totalCents,null,'Pas de total final avant le choix de livraison');
+assert.equal(totals(item,'home').totalCents,8350);
+assert.equal(totals(item,'relay').totalCents,7990,'Le tarif relais est une estimation tant que son sélecteur est absent');
+assert.equal(totals([{size:'M',quantity:2}],'home').totalCents,15850);
+assert.equal(totals(item,'unknown').totalCents,null);
+assert.equal(canConfirmDemo(item,null,'home'),false);
+assert.equal(canConfirmDemo([],details,'home'),false);
+assert.equal(validDetails({...details,email:'invalide'}),false);
+assert.equal(validDetails({...details,city:'   '}),false);
+assert.equal(canConfirmDemo(item,details,'relay'),false,'Un relais non raccordé ne peut pas confirmer une commande démo');
+assert.equal(canConfirmDemo(item,details,'home'),true);
+console.log('13 vérifications commerciales réussies.');
