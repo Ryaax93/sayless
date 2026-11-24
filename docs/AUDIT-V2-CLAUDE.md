@@ -79,12 +79,14 @@ Travail livré sur `claude/integration-v2`. Rien n’est déployé ; `main`, le 
 | Work 15, volet administration | Avec STUDIO (phase B) ; volet écritures inter-sites couvert par W15 |
 | Contrat boutique ↔ serveur | C01–C04 |
 
-## 8. Décisions à prendre par le fondateur
+## 8. Décisions du fondateur (24 novembre 2026)
 
-1. **Une pièce par commande au lancement** tant que le tarif multi-pièces n’est pas fixé (le serveur refuse au-delà) : à confirmer.
-2. **Coordonnées saisies sur la page Stripe** (recommandé : moins de données chez SAYLESS avant paiement, Apple Pay remplit tout) ou maintien de l’étape « coordonnées » de la boutique.
-3. **Zones livrées** : France métropolitaine ; Corse et Monaco à confirmer avec le transporteur ; outre-mer exclu.
-4. **Transporteur et points relais** : choix après la pesée.
-5. **Durée de conservation des coordonnées** (la purge est prête ; la comptabilité reste 10 ans).
-6. **Quantités par taille dans la réponse réseau de `/api/stock`** : jamais affichées à l’écran, mais lisibles par un curieux. À garder ou à masquer.
-7. **Sauvegardes hors Cloudflare** : D1 garde 7 jours d’historique gratuitement ; une copie externe demande de choisir un support (R2 exige un moyen de paiement).
+| Sujet | Décision | Application |
+| --- | --- | --- |
+| Pièces par commande | Une seule pour le DROP 01, architecture multi-articles conservée | `max_items_per_order = 1` |
+| Coordonnées | Saisies sur Stripe, livraison et vrai point relais choisis sur SAYLESS, montant exact au récapitulatif | Session Stripe à option unique, nom du destinataire pour un relais |
+| Zones | France métropolitaine ; Corse et Monaco après vérification ; pas d’outre-mer | Contrôle avant et après paiement (`DONNEES-ET-SAUVEGARDES.md`) |
+| Transporteur | Choisi après l’inventaire et la pesée | En attente |
+| Conservation | Durées proposées selon les obligations légales | Proposition à valider ; purge coupée par défaut |
+| Stock par taille | Minimisation des données publiques | États et quantité commandable seulement ; total exact du drop |
+| Sauvegardes | Chiffrées, restaurables, hors base principale, sans abonnement, rien dans GitHub | KV gratuit + copie hebdomadaire hors Cloudflare, clé privée chez le fondateur |

@@ -3,7 +3,7 @@
 // et import des ventes passées. Un remboursement ne remet jamais une pièce en stock.
 import { all, audit, batch, fail, getSettings, newReference, one, sql, uuid } from './lib.mjs';
 import { sealContact } from './security.mjs';
-import { orderItems, releaseStatements } from './commerce.mjs';
+import { assertZone, orderItems, releaseStatements } from './commerce.mjs';
 import { sessionParams, verifyStripeSignature } from './stripe.mjs';
 import { afterSale } from './notify.mjs';
 
@@ -103,8 +103,23 @@ const paymentIntentId = (s) => (typeof s.payment_intent === 'object' ? s.payment
 function contactFrom(session) {
   const details = session.customer_details ?? {};
   const shipping = session.collected_information?.shipping_details ?? session.shipping_details ?? null;
+  const recipient = (session.custom_fields ?? []).find((f) => f.key === 'recipient_name')?.text?.value ?? null;
   return { name: details.name ?? null, email: details.email ?? null, phone: details.phone ?? null,
-    shipping_name: shipping?.name ?? null, address: shipping?.address ?? null };
+    shipping_name: shipping?.name ?? null, recipient_name: recipient, address: shipping?.address ?? null };
+}
+
+// Adresse saisie sur Stripe hors de la zone livrée (Corse, outre-mer…) : jamais d'envoi ni de
+// remboursement automatique, la commande passe « à vérifier ».
+async function outOfZone(db, order, contact) {
+  if (order.shipping_method !== 'home') return false;
+  const settings = await getSettings(db);
+  const address = contact.address ?? {};
+  try {
+    assertZone(settings, String(address.country ?? ''), String(address.postal_code ?? ''));
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 // Vente confirmée : réservations converties (ou pièce reprise si encore libre), numéro attribué.
@@ -113,6 +128,7 @@ async function confirmSale(env, order, session, deps) {
   const now = deps.now();
   const contact = contactFrom(session);
   const sealed = await sealContact(env, contact);
+  const zoneProblem = await outOfZone(db, order, contact);
   // Les pièces ne sont attribuées qu'une fois, tant que la commande n'est pas déjà tranchée :
   // un renvoi d'événement après une remise en stock ne décompte jamais une seconde fois.
   const open = `(SELECT status FROM orders WHERE id = ?) IN ('pending', 'awaiting_payment', 'expired', 'failed')`;
@@ -135,8 +151,16 @@ async function confirmSale(env, order, session, deps) {
       WHERE id = ? AND number IS NULL AND paid_at IS NOT NULL`, order.id),
     sql(db, `INSERT INTO order_contacts (order_id, sealed, created_at) SELECT ?, ?, ? WHERE ? IS NOT NULL
       ON CONFLICT (order_id) DO NOTHING`, order.id, sealed, now, sealed),
+    sql(db, `UPDATE orders SET status = 'review', updated_at = ? WHERE id = ? AND status = 'paid' AND ? = 1
+      AND paid_at = ?`, now, order.id, zoneProblem ? 1 : 0, now),
   ]);
   const after = await one(db, 'SELECT status FROM orders WHERE id = ?', order.id);
+  if (zoneProblem && after.status === 'review') {
+    await deps.notify({ kind: 'address_out_of_zone', ref: order.id, level: 'critical', title: 'Adresse hors zone livrée',
+      body: `Commande ${order.reference} payée avec une adresse hors zone. Pièce réservée à cette commande ; décision manuelle, aucun remboursement automatique.` });
+    await afterSale(env, order.id, deps, { announce: false });
+    return { status: after.status };
+  }
   if (!sealed) {
     await deps.notify({ kind: 'technical', ref: 'pii_key_missing', level: 'critical',
       title: 'Clé de chiffrement absente', body: 'Les coordonnées de livraison ne sont pas enregistrées : consulte-les dans Stripe.' });

@@ -138,11 +138,17 @@ export async function exportRecettes(env, actor, deps) {
 }
 
 // ---------- données personnelles ----------
-export async function viewContact(env, orderId, actor, deps) {
+// Coordonnées archivées (au-delà de 90 jours après la livraison) : consultation explicite seulement
+// (`archived: true`, protégée par une confirmation Face ID dans STUDIO), toujours journalisée.
+export async function viewContact(env, orderId, actor, deps, { archived = false } = {}) {
   const { db } = env;
   const now = deps.now();
-  const row = await one(db, 'SELECT sealed FROM order_contacts WHERE order_id = ?', orderId);
-  await batch(db, [audit(db, now, actor, 'view_customer_contact', orderId, row ? 'ok' : 'none')]);
+  const row = await one(db, 'SELECT sealed, archived_at FROM order_contacts WHERE order_id = ?', orderId);
+  if (row?.archived_at && !archived) {
+    await batch(db, [audit(db, now, actor, 'view_customer_contact', orderId, 'archived_refused')]);
+    return { archived: true };
+  }
+  await batch(db, [audit(db, now, actor, row?.archived_at ? 'view_archived_contact' : 'view_customer_contact', orderId, row ? 'ok' : 'none')]);
   return row ? openContact(env, row.sealed) : null;
 }
 

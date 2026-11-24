@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 2026-11-24 (soir) — Claude : décisions du fondateur intégrées (PR n° 1)
+
+- Zones : France métropolitaine hors Corse ; Monaco et outre-mer refusés avant paiement ; adresse hors zone saisie sur Stripe → commande « à vérifier » sans envoi ni remboursement automatique. Constats Corse/Monaco et sources : `docs/DONNEES-ET-SAUVEGARDES.md`.
+- Coordonnées sur Stripe : session à option de livraison unique (celle choisie sur SAYLESS), montant identique au récapitulatif, nom du destinataire demandé pour un relais, message de zone pour le domicile.
+- Stock public minimisé (contrat v1.2) : `state` et `orderable` par taille, `total_available` exact pour le drop ; `available` devient un alias transitoire, compatible avec le client actuel.
+- Conservation : proposition de durées (90 jours actives, archive jusqu’à 913 jours, comptabilité 10 ans, traces d’accès 1 an) et module `retention.mjs`, coupé tant que le fondateur ne l’a pas validé.
+- Sauvegardes : copie quotidienne gzip + AES-256-GCM, clé enveloppée par la clé publique RSA du fondateur, rotation 30 + 12 dans Workers KV (gratuit), restauration testée ; aucune donnée dans GitHub.
+- Tests : `tests/backend/decisions.test.mjs` (6 tests). `npm run test:backend` : 51/51 + 1 à porter avec Face ID. Compilation Cloudflare vérifiée.
+
 ## 2026-11-24 — Claude : audit de v2, contrat v1.1 et backend unique (branche `claude/integration-v2`)
 
 - Audit complet de v2 (code et documentation) : `docs/AUDIT-V2-CLAUDE.md`. Plan commun et raccordements attendus de Work : `docs/INTEGRATION-PLAN.md`.

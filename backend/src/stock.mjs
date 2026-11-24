@@ -9,7 +9,9 @@ export function variantState(row) {
   return row.reserved > 0 ? 'held' : 'sold_out';
 }
 
-// Réponse du contrat commun. Toutes les variantes sont présentes, y compris épuisées.
+// Réponse du contrat commun (v1.2, minimisée) : le navigateur reçoit l'état de chaque taille et la
+// quantité qu'il peut commander (plafonnée au maximum par commande), jamais le stock exact par
+// taille. Seul le total du drop, affiché par la boutique, est exact.
 export async function publicStock(db, productId, now) {
   let rows;
   let settings;
@@ -22,12 +24,16 @@ export async function publicStock(db, productId, now) {
     throw fail('stock_unavailable');
   }
   if (!rows.length || rows[0].status !== 'published') throw fail('unknown_product');
+  const cap = Math.max(Number(settings.max_items_per_order || 1), 1);
+  let total = 0;
   const variants = rows.map((r) => {
     const state = variantState(r);
-    return { sku: r.sku, available: state === 'unavailable' ? 0 : Math.max(r.on_hand - r.reserved, 0), state };
+    const free = state === 'available' ? r.on_hand - r.reserved : 0;
+    total += free;
+    const orderable = Math.min(free, cap);
+    return { sku: r.sku, state, orderable, available: orderable }; // « available » : alias transitoire de « orderable »
   });
   const verified = variants.every((v) => v.state !== 'unavailable');
-  const total = variants.reduce((n, v) => n + v.available, 0);
   let dropStatus = 'unavailable';
   if (verified) {
     if (total > 0) dropStatus = 'available';
@@ -41,6 +47,8 @@ export async function publicStock(db, productId, now) {
     updated_at: iso(now),
     checkout_enabled: verified && mode === 'open' && settings.payments_enabled === '1' && dropStatus === 'available',
     drop_status: dropStatus,
+    total_available: verified ? total : null,
+    max_items_per_order: cap,
     variants,
   };
 }

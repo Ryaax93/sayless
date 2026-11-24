@@ -32,8 +32,10 @@ Fondateur (iPhone, Mac) ─► studio.saylessbrand.fr (phase B : STUDIO + /api/a
 
 ## Ce que Work doit raccorder (phase E)
 
-1. **Parcours** : panier → livraison (domicile ou relais) → récapitulatif renvoyé par `POST /api/quote` → CGV et Turnstile → « Payer » (`POST /api/checkout`) → page Stripe. Si le fondateur valide la collecte par Stripe, l’étape « coordonnées » disparaît de la boutique.
-2. **Une pièce par commande** tant que `max_items_per_order` vaut 1 : désactiver « + » au-delà ; gérer `422 quantity_not_supported`.
+1. **Parcours (validé par le fondateur)** : panier → livraison (domicile avec code postal, ou point relais réel choisi sur SAYLESS) → récapitulatif au montant exact renvoyé par `POST /api/quote` → CGV et Turnstile → « Payer » (`POST /api/checkout`) → page Stripe, qui collecte les coordonnées. L’étape « coordonnées » disparaît de la boutique.
+2. **Une pièce par commande** (validé) : `max_items_per_order` vaut 1 ; désactiver « + » au-delà ; gérer `422 quantity_not_supported`. Le code reste multi-articles.
+2 bis. **Zones** : afficher « Livraison en France métropolitaine, hors Corse pour le moment » ; demander le code postal pour le domicile ; gérer `postcode_required` et `destination_not_supported`.
+2 ter. **Stock minimisé** : lire `total_available` pour le total affiché et `orderable` pour chaque taille ; `available` n’est plus qu’un alias transitoire.
 3. **Retours de Stripe** : `/merci?ref=…&session_id=…` appelle `POST /api/checkout/status` et affiche « Confirmation en cours » tant que le statut est `pending` ou `processing` ; `/commande-annulee` n’envoie rien (le serveur libère lui-même). Sans `404.html`, Pages sert `index.html` sur ces chemins.
 4. **Message de pause validé**, affiché quand `mode = paused` : « DROP 01 — TEMPORARILY UNAVAILABLE. / La boutique est momentanément indisponible. Retrouvez-nous prochainement sur saylessbrand.fr. / Instagram : @sayless.brand / SAY LESS. DO MORE. »
 5. **Lecture du stock** : uniquement écran visible et vues produit, panier, paiement ; arrêt après 10 min sans interaction ; respecter `Retry-After`.
@@ -50,7 +52,7 @@ Chaque étape est vérifiée avant la suivante. Aucune clé secrète ne transite
 | Ordre | Étape | Dépend de | Statut |
 | --- | --- | --- | --- |
 | 1 | Inventaire physique S/M/L et pesée d’un colis emballé | — | En cours (fondateur) |
-| 2 | Accès GitHub de Claude limité au dépôt `Ryaax93/sayless` (pousser la branche, ouvrir la PR) | — | À faire |
+| 2 | Accès GitHub de Claude limité au dépôt `Ryaax93/sayless` (pousser la branche, ouvrir la PR) | — | Fait (PR brouillon n° 1) |
 | 3 | Compte Cloudflare gratuit : base D1 de test, projets de test sans domaine | 2 | À faire |
 | 4 | Stripe en mode test : clé restreinte et webhook de test, saisis dans Cloudflare | 3 | À faire |
 | 5 | Discord : webhook d’un salon privé | 3 | À faire |

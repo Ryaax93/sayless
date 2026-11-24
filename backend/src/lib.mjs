@@ -10,7 +10,7 @@ export const ERROR_STATUS = Object.freeze({
   stale_revision: 409, quantity_below_reservations: 409,
   payload_too_large: 413, unsupported_media_type: 415,
   invalid_items: 422, quantity_not_supported: 422, relay_required: 422, invalid_relay: 422,
-  destination_not_supported: 422,
+  destination_not_supported: 422, postcode_required: 422,
   rate_limited: 429, hold_limit: 429,
   stock_unavailable: 503, service_unavailable: 503, paused: 503, unavailable: 503,
   relay_unavailable: 503, challenge_unavailable: 503, not_configured: 503,

@@ -90,8 +90,20 @@ export function sessionParams(order, items, origin) {
     ['shipping_options[0][shipping_rate_data][fixed_amount][currency]', 'eur'],
     ['shipping_options[0][shipping_rate_data][display_name]', order.shipping_method === 'relay' ? `Point relais — ${order.relay_label ?? ''}`.trim() : 'Colissimo domicile'],
   ];
-  if (order.shipping_method === 'home') p.push(['shipping_address_collection[allowed_countries][0]', 'FR']);
-  if (order.shipping_method === 'relay') p.push(['metadata[relay_id]', order.relay_id]);
+  // Une seule option de livraison : celle choisie sur SAYLESS. Le montant affiché par Stripe est
+  // celui du récapitulatif SAYLESS ; le client ne peut ni changer de mode ni de point relais ici.
+  if (order.shipping_method === 'home') {
+    p.push(['shipping_address_collection[allowed_countries][0]', 'FR']);
+    p.push(['custom_text[shipping_address][message]', 'Livraison en France métropolitaine uniquement (hors Corse et outre-mer pour le moment).']);
+  }
+  if (order.shipping_method === 'relay') {
+    p.push(['metadata[relay_id]', order.relay_id]);
+    p.push(['custom_fields[0][key]', 'recipient_name']);
+    p.push(['custom_fields[0][label][type]', 'custom']);
+    p.push(['custom_fields[0][label][custom]', 'Nom de la personne qui retirera le colis']);
+    p.push(['custom_fields[0][type]', 'text']);
+    p.push(['custom_fields[0][optional]', 'false']);
+  }
   items.forEach((item, i) => {
     p.push([`line_items[${i}][quantity]`, String(item.quantity)]);
     p.push([`line_items[${i}][price_data][currency]`, 'eur']);

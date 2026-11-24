@@ -25,7 +25,8 @@ test('W01 stock invendable tant que l’inventaire physique n’est pas confirm�
   assert.deepEqual([q.status, q.body.error], [503, 'stock_unavailable']);
   await recordInventory(b.real, { counts: { 'TEST-S': 2, 'TEST-M': 4, 'TEST-L': 1 }, actor: 'fondateur', note: 'écart avec la déclaration théorique noté', now: b.clock.now() });
   stock = await publicStock(b.real, 'test-001', b.clock.now());
-  assert.deepEqual([stock.verified, stock.drop_status, stock.variants.reduce((n, v) => n + v.available, 0)], [true, 'available', 7]);
+  assert.deepEqual([stock.verified, stock.drop_status, stock.total_available], [true, 'available', 7]);
+  assert.ok(stock.variants.every((v) => v.orderable <= 1 && v.available === v.orderable), 'aucune quantité exacte par taille');
 });
 
 test('W02 20 acheteurs simultanés ne réservent jamais plus de 3 pièces', async () => {
@@ -39,7 +40,7 @@ test('W03 panier de plusieurs tailles : tout est annulé si une ligne n’est pl
   const b = await bench({ 'TEST-S': 1, 'TEST-M': 1 });
   await b.real.prepare("UPDATE settings SET value = '2' WHERE key = 'max_items_per_order'").run();
   const items = [{ sku: 'TEST-S', quantity: 1 }, { sku: 'TEST-M', quantity: 1 }];
-  const quote = await b.api('POST', '/api/quote', { body: { items, shipping: 'home' }, ip: '10.41.0.1' });
+  const quote = await b.api('POST', '/api/quote', { body: { items, shipping: 'home', postcode: '75011' }, ip: '10.41.0.1' });
   assert.equal(quote.status, 200);
   assert.equal((await b.checkout('TEST-M', '10.41.0.2')).status, 200); // un autre client prend la M
   const res = await b.checkout(null, '10.41.0.1', { items, quote });
@@ -207,7 +208,7 @@ test('C02 parcours complet avec le vrai client : devis serveur, checkout idempot
   const { api, client } = await workClient(b);
   const stock = api.normalizeStock(await client.stock('test-001'), ['TEST-M']);
   const input = { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', terms_version: '2026-11', turnstile: 'jeton-test' };
-  const quote = await client.quote({ items: input.items, shipping: 'home' });
+  const quote = await client.quote({ items: input.items, shipping: 'home', postcode: '75011' });
   assert.deepEqual([quote.currency, quote.total_cents, quote.shipping_cents], ['EUR', 8350, 850]);
   const result = await client.checkout(input, { stock, quote, idempotencyKey: 'cle-client-boutique-01' });
   assert.match(result.url, /^https:\/\/checkout\.stripe\.com\//);

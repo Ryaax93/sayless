@@ -9,7 +9,7 @@ import { handleOps, handlePublicApi, createContext } from '../../backend/src/rou
 import { StripeError } from '../../backend/src/stripe.mjs';
 import { recordInventory } from '../../backend/src/stock.mjs';
 
-const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql'];
+const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql'];
 export const T0 = 1_800_000_000; // horloge simulée (secondes)
 export const ORIGIN = 'https://boutique.test';
 export const PII = { name: 'Client Test', email: 'client.test@example.invalid', phone: '+33100000000',
@@ -21,11 +21,12 @@ const SLOTS = 120;
 export async function startDatabases() {
   mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("ok")}}',
     d1Databases: Object.fromEntries(Array.from({ length: SLOTS }, (_, i) => [`DB${i}`, `test-db-${i}`])),
-    compatibilityDate: '2026-05-15' });
+    kvNamespaces: ['BACKUPS'], compatibilityDate: '2026-05-15' });
 }
 export const stopDatabases = () => mf?.dispose();
+export const backupStore = () => mf.getKVNamespace('BACKUPS');
 
-export async function migrate(db, files = MIGRATIONS.slice(0, 1)) {
+export async function migrate(db, files = [MIGRATIONS[0], MIGRATIONS[2]]) {
   for (const file of files) {
     const text = await readFile(new URL(`../../backend/migrations/${file}`, import.meta.url), 'utf8');
     for (const part of text.split('--> statement-breakpoint').map((s) => s.trim()).filter(Boolean)) await db.prepare(part).run();
@@ -111,7 +112,7 @@ export class FakeStripe {
       client_reference_id: p.client_reference_id, metadata: { sayless_order_id: p['metadata[sayless_order_id]'] },
       amount_total: lines.reduce((n, l) => n + l.unit * l.quantity, 0) + shipping, currency: 'eur',
       url: `https://checkout.stripe.com/c/pay/${sid}`, expires_at: Number(p.expires_at), created: this.clock.now(),
-      lines, pi: null, customer_details: null, payment_link: null });
+      lines, pi: null, customer_details: null, payment_link: null, params: p });
     this.keys.set(key, { body, sid });
     if (this.loseResponse) throw new StripeError('network');
     return this.view(sid);
@@ -133,7 +134,8 @@ export class FakeStripe {
     const s = this.sessions.get(sid);
     s.status = 'complete';
     s.customer_details = { name: customer.name, email: customer.email, phone: customer.phone };
-    s.shipping_details = { name: customer.name, address: customer.address };
+    if (s.params?.['shipping_address_collection[allowed_countries][0]']) s.shipping_details = { name: customer.name, address: customer.address };
+    if (s.params?.['custom_fields[0][key]'] === 'recipient_name') s.custom_fields = [{ key: 'recipient_name', type: 'text', text: { value: customer.name } }];
     s.pi = { id: rid('pi'), status: method === 'card' ? 'succeeded' : 'processing' };
     s.payment_status = method === 'card' ? 'paid' : 'unpaid';
   }
@@ -179,9 +181,15 @@ export class FakeCarrier {
     return label;
   }
 }
+// Points relais simulés : un à Paris, un en Corse (hors zone), un fermé. Aucun point réel.
+const RELAYS = {
+  'TEST-RELAY-1': { postcode: '75016', city: 'Paris' },
+  'TEST-RELAY-CORSE': { postcode: '20000', city: 'Ajaccio' },
+  'TEST-RELAY-CLOSED': { postcode: '69001', city: 'Lyon', open: false },
+};
 export const fakeRelays = {
-  async find(id) { return id.startsWith('TEST-RELAY') ? { id, name: 'Relais Test', network: 'TEST', country: 'FR', open: id !== 'TEST-RELAY-CLOSED' } : null; },
-  async search() { return [{ id: 'TEST-RELAY-1', name: 'Relais Test', network: 'TEST' }]; },
+  async find(id) { return RELAYS[id] ? { id, name: 'Relais Test', network: 'TEST', country: 'FR', open: true, ...RELAYS[id] } : null; },
+  async search() { return [{ id: 'TEST-RELAY-1', name: 'Relais Test', network: 'TEST', ...RELAYS['TEST-RELAY-1'] }]; },
 };
 
 export const sign = (raw, t, secret) => `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex')}`;
@@ -192,7 +200,7 @@ export const event = (type, objectId, object = 'checkout.session') => ({ id: rid
 export async function bench(stocks = { 'TEST-M': 1 }, { mode = 'open', productStatus = 'published', threshold = 2,
   payments = true, catalogSeed = false } = {}) {
   const real = await emptyDatabase();
-  await migrate(real, catalogSeed ? MIGRATIONS : MIGRATIONS.slice(0, 1));
+  await migrate(real, catalogSeed ? MIGRATIONS : [MIGRATIONS[0], MIGRATIONS[2]]);
   const db = downable(real);
   const clock = { t: T0, now() { return this.t; } };
   const stripe = new FakeStripe(clock);
@@ -233,12 +241,12 @@ function helpersFor(b) {
   const api = (method, path, opts) => call((r) => handlePublicApi(r, b.env, { deps: b.deps, catalog: opts?.catalog }), method, path, opts);
   return {
     api,
-    async quote(items, { ip, shipping = 'home', relay_id = null } = {}) {
-      return api('POST', '/api/quote', { body: { items, shipping, relay_id }, ip });
+    async quote(items, { ip, shipping = 'home', relay_id = null, postcode = '75011', country } = {}) {
+      return api('POST', '/api/quote', { body: { items, shipping, relay_id, postcode: shipping === 'home' ? postcode : undefined, country }, ip });
     },
-    async checkout(sku, ip = '10.0.0.1', { shipping = 'home', relay_id = null, key = randomBytes(12).toString('hex'), quote = null, quantity = 1, items = null } = {}) {
+    async checkout(sku, ip = '10.0.0.1', { shipping = 'home', relay_id = null, key = randomBytes(12).toString('hex'), quote = null, quantity = 1, items = null, postcode = '75011' } = {}) {
       const lines = items ?? [{ sku, quantity }];
-      const q = quote ?? (await api('POST', '/api/quote', { body: { items: lines, shipping, relay_id }, ip }));
+      const q = quote ?? (await api('POST', '/api/quote', { body: { items: lines, shipping, relay_id, postcode: shipping === 'home' ? postcode : undefined }, ip }));
       if (q.status !== 200) return { ...q, stage: 'quote' };
       const res = await api('POST', '/api/checkout', { ip, headers: { 'Idempotency-Key': key },
         body: { items: lines, shipping, relay_id, quote_id: q.body.id, terms_version: '2026-11', turnstile: 'jeton-test' } });

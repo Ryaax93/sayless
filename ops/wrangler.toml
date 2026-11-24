@@ -11,6 +11,9 @@ workers_dev = true
 ENVIRONMENT = "staging"
 PUBLIC_ORIGIN = "https://sayless-boutique.pages.dev"
 
+# Clé PUBLIQUE de sauvegarde (JWK RSA-OAEP), non secrète, fournie lors de l'étape « sauvegardes ».
+# BACKUP_PUBLIC_KEY = "{...}"
+
 [triggers]
 crons = ["* * * * *"]
 
@@ -19,3 +22,8 @@ binding = "DB"
 database_name = "sayless-staging"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "../backend/migrations"
+
+# Espace des sauvegardes chiffrées (Workers KV, offre gratuite) ; identifiant fourni à l'étape Cloudflare.
+[[kv_namespaces]]
+binding = "BACKUPS"
+id = "00000000000000000000000000000000"

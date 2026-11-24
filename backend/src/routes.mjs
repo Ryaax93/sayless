@@ -7,6 +7,8 @@ import { checkoutStatus, createQuote, startCheckout } from './commerce.mjs';
 import { handleStripeWebhook, reconcileSession, sweep } from './payments.mjs';
 import { configuredChannels, createNotifier, deliverOutbox, discordSender, maybeDailyReport } from './notify.mjs';
 import { relayOverdue } from './operations.mjs';
+import { applyRetention } from './retention.mjs';
+import { maybeDailyBackup } from './backup.mjs';
 import { createStripeClient } from './stripe.mjs';
 
 // Contexte d'exécution : liaisons Cloudflare + dépendances injectables (horloge, Stripe, relais).
@@ -114,7 +116,8 @@ export async function handleOps(request, env, options = {}) {
   return json({ error: 'not_found' }, 404);
 }
 
-// Tâche de chaque minute : balayage, envois, rapport de 10 h, relances de relais (toutes les heures).
+// Tâche de chaque minute : balayage, envois, rapport de 10 h ; chaque heure : relances de relais,
+// sauvegarde chiffrée (une fois par jour après 3 h) et conservation des données.
 export async function runScheduled(env, options = {}) {
   const { ctx, deps } = createContext(env, options.deps);
   const report = {};
@@ -125,9 +128,12 @@ export async function runScheduled(env, options = {}) {
       report[name] = `erreur: ${error.message}`;
     }
   };
+  const minute = Math.floor(deps.now() / 60) % 60;
   await step('sweep', () => sweep(ctx, deps));
   await step('daily_report', () => maybeDailyReport(ctx, deps));
-  if (Math.floor(deps.now() / 60) % 60 === 0) await step('relay_overdue', () => relayOverdue(ctx, deps));
+  if (minute === 0) await step('relay_overdue', () => relayOverdue(ctx, deps));
+  if (minute === 5) await step('backup', () => maybeDailyBackup(ctx, deps));
+  if (minute === 10) await step('retention', () => applyRetention(ctx, deps));
   const senders = {};
   if (deps.channels.includes('discord')) senders.discord = discordSender(env.DISCORD_WEBHOOK_URL);
   await step('outbox', () => deliverOutbox(ctx, senders, deps));

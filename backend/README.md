@@ -13,7 +13,9 @@ Code métier unique, partagé par l’API de la boutique (`functions/api/[[path]
 | `src/notify.mjs` | Centre de notifications, file Discord/push, alertes de stock, rapport de 10 h |
 | `src/operations.mjs` | Étiquettes, suivi, retours, livre des recettes, coordonnées et purge |
 | `src/security.mjs` | Origine, corps JSON, limites d’abus, Turnstile, chiffrement AES-GCM des coordonnées |
-| `src/backup.mjs` | Sauvegarde logique et restauration contrôlée |
+| `src/backup.mjs` | Sauvegarde logique chiffrée (clé publique du fondateur), rotation dans KV, restauration contrôlée |
+| `src/retention.mjs` | Conservation des données : archivage, purge, anonymisation (coupée tant que non validée) |
+| `migrations/0003_decisions_fondateur.sql` | Zones livrées, durées de conservation, réglages de sauvegarde |
 | `src/routes.mjs` | Routage HTTP et tâches planifiées |
 
 ## Commandes
@@ -33,6 +35,6 @@ npm run check:cloudflare  # compilation du Worker et des Functions, sans envoi
 ## Règles
 
 - Aucun secret, aucune quantité réelle, aucun montant encaissé ni donnée client dans Git. Les ventes passées et l’inventaire sont saisis par le fondateur dans STUDIO.
-- Secrets saisis par le fondateur dans Cloudflare : `APP_SECRET`, `PII_KEY` (32 octets en base64url), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `TURNSTILE_SECRET`, `DISCORD_WEBHOOK_URL`. Variables : `ENVIRONMENT`, `PUBLIC_ORIGIN`.
+- Secrets saisis par le fondateur dans Cloudflare : `APP_SECRET`, `PII_KEY` (32 octets en base64url), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `TURNSTILE_SECRET`, `DISCORD_WEBHOOK_URL`. Variables : `ENVIRONMENT`, `PUBLIC_ORIGIN`, `BACKUP_PUBLIC_KEY` (clé publique, non secrète). Liaisons : `DB` (D1), `BACKUPS` (KV).
 - Une clé Stripe de production n’est acceptée qu’avec `ENVIRONMENT = production`, et une clé de test qu’en dehors.
 - Jamais d’`INSERT OR IGNORE` ni d’`OR REPLACE` sur une table qui déclenche un mouvement de stock : un test le vérifie.

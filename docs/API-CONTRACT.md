@@ -1,6 +1,13 @@
-# Contrat commun de la boutique — v1.1
+# Contrat commun de la boutique — v1.2
 
 **Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 = revue de Claude, implémentée dans `backend/` et testée sur D1 locale (dont le vrai `api-client.js` contre le vrai serveur).** Rien n’est déployé. À valider par Work (client) et par le fondateur pour les points commerciaux marqués ★. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+
+## Changements v1.2 (décisions du fondateur, 24 novembre)
+
+- **Stock minimisé** : par taille, seulement `state` et `orderable` (quantité commandable, plafonnée au maximum par commande). Nouveaux champs `total_available` (total exact du drop, affiché par la boutique) et `max_items_per_order`. `available` reste un alias transitoire de `orderable` : la boutique doit lire `total_available` pour son total.
+- **Zones** : France métropolitaine hors Corse ; Monaco et outre-mer refusés. Le devis domicile exige `postcode` (`422 postcode_required`, `422 destination_not_supported`).
+- **Coordonnées sur Stripe, livraison choisie sur SAYLESS** : mode de livraison et point relais choisis dans la boutique ; la page Stripe ne propose qu’une option, au montant exact du récapitulatif ; elle demande le nom de la personne qui retire un colis en relais.
+- **Une pièce par commande** au lancement : validé ; l’API reste multi-articles.
 
 ## Changements v1.1 (Claude)
 
@@ -36,20 +43,22 @@
   "updated_at": "<instant de lecture serveur>",
   "checkout_enabled": false,
   "drop_status": "available | held | sold_out | unavailable",
+  "total_available": "<total exact du drop, ou null si non vérifié>",
+  "max_items_per_order": 1,
   "variants": [
-    {"sku": "ZH-PINK-S", "available": "<entier >= 0>", "state": "available | held | sold_out | unavailable"}
+    {"sku": "ZH-PINK-S", "state": "available | held | sold_out | unavailable", "orderable": "<0 à max_items_per_order>", "available": "<alias transitoire de orderable>"}
   ]
 }
 ```
 
 Règles serveur (implémentées) :
 
-- `available` = pièces présentes − pièces en cours de paiement. `state = available` si `available > 0` ; `held` si 0 mais des pièces sont réservées ; `sold_out` si plus aucune pièce présente ; `unavailable` tant que l’inventaire physique de la taille n’est pas confirmé dans STUDIO.
+- Disponible = pièces présentes − pièces en cours de paiement, calculé par le serveur et jamais envoyé par taille. `state = available` s’il en reste ; `held` si 0 mais des pièces sont réservées ; `sold_out` si plus aucune pièce présente ; `unavailable` tant que l’inventaire physique de la taille n’est pas confirmé dans STUDIO.
 - `verified` n’est vrai que si toutes les tailles du produit sont confirmées et la base lisible ; sinon `drop_status = unavailable` et `503 stock_unavailable` au devis.
 - `drop_status = sold_out` exige **tout le drop** confirmé et vendu. Une pièce seulement réservée donne `held`, jamais SOLD OUT. Le message « DROP 01 — SOLD OUT. » reste conditionné à cet état.
 - `checkout_enabled` = vérifié, boutique ouverte, paiements ouverts par le fondateur et `drop_status = available`.
 - `mode = paused` : la boutique masque le total, bloque l’achat et affiche le message validé : « DROP 01 — TEMPORARILY UNAVAILABLE. / La boutique est momentanément indisponible. Retrouvez-nous prochainement sur saylessbrand.fr. / Instagram : @sayless.brand / SAY LESS. DO MORE. »
-- Le frontend n’affiche jamais de quantité par taille. Elles restent lisibles dans la réponse réseau ★ (à masquer si le fondateur le souhaite).
+- Le navigateur ne reçoit aucune quantité par taille au-delà de `orderable` (décision du fondateur : minimisation). Le total du drop est exact.
 - Fraîcheur acceptée : 30 secondes. Lecture toutes les 20 secondes **uniquement** écran visible et vues produit, panier ou paiement ; arrêt après 10 minutes d’inactivité. Chaque lecture compte dans le quota gratuit de 100 000 requêtes par jour.
 
 ## Livraison et devis
@@ -57,10 +66,10 @@ Règles serveur (implémentées) :
 `POST /api/quote` :
 
 ```json
-{"items": [{"sku": "ZH-PINK-M", "quantity": 1}], "shipping": "home | relay", "relay_id": null, "country": "FR"}
+{"items": [{"sku": "ZH-PINK-M", "quantity": 1}], "shipping": "home | relay", "relay_id": null, "country": "FR", "postcode": "75011"}
 ```
 
-Aucune coordonnée personnelle. Réponse :
+Aucune coordonnée personnelle : seul le code postal de livraison est demandé pour le domicile, afin de vérifier la zone avant le paiement (il n’est pas enregistré). Réponse :
 
 ```json
 {
@@ -77,10 +86,10 @@ Aucune coordonnée personnelle. Réponse :
 ```
 
 - Le récapitulatif affiché avant « Payer » est **cette réponse**. Le devis n’écrit rien en base.
-- Tarifs validés pour une pièce : relais 490, domicile 850. Paniers de plusieurs pièces refusés (`422 quantity_not_supported`, champ `max_items`) tant que la grille n’est pas validée ★.
-- Destination : `FR` uniquement (`422 destination_not_supported`) ; Corse et Monaco à confirmer avec le transporteur ★.
+- Tarifs validés pour une pièce : relais 490, domicile 850. Paniers de plusieurs pièces refusés (`422 quantity_not_supported`, champ `max_items`) : une pièce par commande au lancement, validé par le fondateur.
+- Zone : France métropolitaine hors Corse (`20…`) et outre-mer (`97…`, `98…`) ; Monaco refusé (`MC`). Domicile sans code postal : `422 postcode_required` ; hors zone : `422 destination_not_supported`. Relais : le code postal du point est contrôlé de la même façon. Voir `DONNEES-ET-SAUVEGARDES.md`.
 - Relais : `relay_id` revérifié auprès du fournisseur (ouvert, pays). Sans fournisseur raccordé : `503 relay_unavailable` ; ne pas basculer seul vers le domicile.
-- Coordonnées ★ : e-mail, nom, téléphone et adresse (domicile) sont saisis sur la page Stripe, puis enregistrés chiffrés après le paiement. Rien n’est conservé avant. Si le fondateur préfère garder l’étape « coordonnées » de la boutique, ces données transiteront au checkout sans être stockées : à revoir ensemble.
+- Coordonnées (validé par le fondateur) : e-mail, nom, téléphone et adresse (domicile) sont saisis sur la page Stripe, puis enregistrés chiffrés après le paiement. Le mode de livraison et le point relais sont choisis sur SAYLESS avant le paiement, et le récapitulatif affiche le montant exact. La page Stripe ne propose que l’option choisie ; pour un relais, elle demande le nom de la personne qui retirera le colis. Une adresse hors zone saisie sur Stripe met la commande « à vérifier » (pas d’envoi ni de remboursement automatique).
 
 ## Points relais
 
@@ -116,7 +125,7 @@ Réponse : `{"url": "https://checkout.stripe.com/...", "order_reference": "SL-XX
 | 409 `checkout_in_progress` | Réessayer avec la même clé après `Retry-After` (2 s) |
 | 409 `attempt_closed` | La tentative est terminée (`order_reference` fourni) : nouvelle clé et nouveau devis |
 | 409 `terms_outdated` | Recharger les CGV et redemander l’acceptation |
-| 422 `invalid_items`, `quantity_not_supported`, `destination_not_supported` | Corriger le panier ou la destination |
+| 422 `invalid_items`, `quantity_not_supported`, `destination_not_supported`, `postcode_required` | Corriger le panier, le code postal ou la destination ; afficher « Livraison en France métropolitaine, hors Corse pour le moment » |
 | 422 `invalid_relay` / `relay_required` | Revenir au choix du relais |
 | 503 `stock_unavailable`, `service_unavailable`, `not_configured` | Aucun compteur certain ni paiement ; proposer de réessayer |
 | 503 `relay_unavailable` | Désactiver le mode relais |

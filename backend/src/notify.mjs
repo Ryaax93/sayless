@@ -30,13 +30,13 @@ export function configuredChannels(env) {
 
 // Après une vente : nouvelle commande, stock faible (chaque palier une fois), taille épuisée,
 // fin du drop. Une pièce réservée n'est jamais comptée comme épuisée.
-export async function afterSale(env, orderId, deps) {
+export async function afterSale(env, orderId, deps, { announce = true } = {}) {
   const { db } = env;
   const order = await one(db, 'SELECT id, number, reference, total_cents, shipping_method, source FROM orders WHERE id = ?', orderId);
   const items = await all(db, `SELECT oi.sku, oi.quantity, v.size, v.product_id, p.drop_id FROM order_items oi
     LEFT JOIN variants v ON v.sku = oi.sku LEFT JOIN products p ON p.id = v.product_id WHERE oi.order_id = ?`, orderId);
   const mode = order.shipping_method === 'relay' ? 'point relais' : order.shipping_method === 'home' ? 'domicile' : 'lien 1.0';
-  await deps.notify({ kind: 'order_paid', ref: order.id, level: 'info',
+  if (announce) await deps.notify({ kind: 'order_paid', ref: order.id, level: 'info',
     title: `Nouvelle commande ${order.number ? pad4(order.number) : order.reference}`,
     body: `${items.map((i) => `${i.quantity} × taille ${i.size ?? '?'}`).join(', ')} · ${euros(order.total_cents)} · ${mode}. À préparer.` });
   const settings = await getSettings(db);

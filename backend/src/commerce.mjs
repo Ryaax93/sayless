@@ -47,16 +47,30 @@ async function stockCheck(db, items) {
   }
 }
 
-async function resolveShipping(db, deps, shipping, relayId) {
+// Zone livrée (décision du 24 novembre) : pays autorisés, codes postaux exclus (Corse, outre-mer).
+export function assertZone(settings, country, postcode) {
+  const countries = String(settings.shipping_countries || 'FR').split(',').map((c) => c.trim()).filter(Boolean);
+  const excluded = String(settings.excluded_postcode_prefixes ?? '20,97,98').split(',').map((p) => p.trim()).filter(Boolean);
+  if (!countries.includes(country)) throw fail('destination_not_supported');
+  if (typeof postcode !== 'string' || !/^\d{5}$/.test(postcode)) throw fail('postcode_required');
+  if (excluded.some((prefix) => postcode.startsWith(prefix))) throw fail('destination_not_supported');
+}
+
+async function resolveShipping(db, deps, settings, { shipping, relayId, country = 'FR', postcode }) {
   if (!['relay', 'home'].includes(shipping)) throw fail('invalid_request');
   const rate = await one(db, 'SELECT cents, label FROM shipping_rates WHERE method = ?', shipping);
   if (!rate) throw fail('service_unavailable');
-  if (shipping === 'home') return { method: 'home', cents: rate.cents, relay: null };
+  if (shipping === 'home') {
+    assertZone(settings, country, postcode);
+    return { method: 'home', cents: rate.cents, relay: null, zone: { country, postcode } };
+  }
   if (typeof relayId !== 'string' || !relayId.trim()) throw fail('relay_required');
   if (!deps.relays) throw fail('relay_unavailable');
   const relay = await deps.relays.find(relayId);
-  if (!relay || relay.open === false || relay.country !== 'FR') throw fail('invalid_relay');
-  return { method: 'relay', cents: rate.cents, relay: { id: relay.id, label: relay.name, network: relay.network ?? null } };
+  if (!relay || relay.open === false) throw fail('invalid_relay');
+  assertZone(settings, relay.country, relay.postcode);
+  return { method: 'relay', cents: rate.cents, relay: { id: relay.id, label: relay.name, network: relay.network ?? null,
+    postcode: relay.postcode, city: relay.city ?? null }, zone: { country: relay.country, postcode: relay.postcode } };
 }
 
 // ---------- devis ----------
@@ -67,16 +81,16 @@ export async function createQuote(env, body, deps) {
   if (!env.APP_SECRET) throw fail('not_configured');
   const settings = await getSettings(db).catch(() => { throw fail('service_unavailable'); });
   if (settings.shop_mode !== 'open') throw fail('paused');
-  if ((body.country ?? 'FR') !== 'FR') throw fail('destination_not_supported');
   const items = normalizeItems(body.items, Number(settings.max_items_per_order || 1));
   const lines = await priceLines(db, items);
   await stockCheck(db, items);
-  const ship = await resolveShipping(db, deps, body.shipping, body.relay_id);
+  const ship = await resolveShipping(db, deps, settings, { shipping: body.shipping, relayId: body.relay_id,
+    country: body.country ?? 'FR', postcode: body.postcode });
   const subtotal = lines.reduce((n, l) => n + l.unit_price_cents * l.quantity, 0);
   const expires = now + Number(settings.quote_seconds || 600);
   const payload = {
     v: 1, exp: expires, items: lines.map((l) => [l.sku, l.quantity, l.unit_price_cents]),
-    shipping: ship.method, relay: ship.relay, ship: ship.cents, total: subtotal + ship.cents,
+    shipping: ship.method, relay: ship.relay, zone: ship.zone, ship: ship.cents, total: subtotal + ship.cents,
   };
   const encoded = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   const id = `q1.${encoded}.${await hmacB64(env.APP_SECRET, `quote:${encoded}`)}`;
@@ -146,7 +160,9 @@ export async function startCheckout(env, input, deps) {
   await deps.turnstile(body.turnstile, ip);
 
   const lines = await priceLines(db, items);
-  const ship = await resolveShipping(db, deps, body.shipping, relayId);
+  // Mode de livraison, point relais et zone revérifiés au moment de payer (le devis peut dater).
+  const ship = await resolveShipping(db, deps, settings, { shipping: body.shipping, relayId,
+    country: quote.zone?.country ?? 'FR', postcode: quote.zone?.postcode });
   const changed = lines.some((l, i) => l.unit_price_cents !== quote.items[i][2]) || ship.cents !== quote.ship;
   if (changed) throw fail('price_changed');
 
