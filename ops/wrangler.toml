@@ -1,0 +1,21 @@
+# Worker d'exploitation SAYLESS (environnement de test isolé par défaut).
+# Aucun secret ici : STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_SECRET, PII_KEY et
+# DISCORD_WEBHOOK_URL sont saisis par le fondateur dans Cloudflare (Workers > Paramètres > Variables).
+# database_id est remplacé lors de l'étape Cloudflare guidée ; rien n'est déployé automatiquement.
+name = "sayless-ops-staging"
+main = "worker.mjs"
+compatibility_date = "2026-05-15"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "staging"
+PUBLIC_ORIGIN = "https://sayless-boutique.pages.dev"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sayless-staging"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../backend/migrations"

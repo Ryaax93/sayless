@@ -1,5 +1,16 @@
 # Journal des modifications
 
+## 2026-11-24 — Claude : audit de v2, contrat v1.1 et backend unique (branche `claude/integration-v2`)
+
+- Audit complet de v2 (code et documentation) : `docs/AUDIT-V2-CLAUDE.md`. Plan commun et raccordements attendus de Work : `docs/INTEGRATION-PLAN.md`.
+- Contrat API v1.1 proposé dans `docs/API-CONTRACT.md` : devis sans donnée personnelle, une pièce par commande à valider, `POST /api/checkout/status`, nouveaux codes d’erreur, message de pause validé. À valider par Work et le fondateur.
+- Nouveau backend unique `backend/` : migrations D1 (registre de stock en ajout seul, transitions gardées, aucune quantité réelle), devis signé, checkout idempotent, webhooks Stripe relus chez Stripe, balayage, filet de sécurité du lien 1.0, import des ventes passées, notifications sans donnée personnelle, Discord, rapport de 10 h, étiquettes, suivi relais, retours, livre des recettes, coordonnées chiffrées et purgeables, sauvegarde et restauration.
+- `functions/api/[[path]].js` (API de la boutique, même origine) et `ops/` (Worker : webhooks, tâche de chaque minute). `ops/wrangler.toml` ne contient ni secret ni identifiant réel.
+- Tests `npm run test:backend` : 45/45 sur D1 locale (28 scénarios de Claude portés, 13 tests de parité avec Work, 4 tests de contrat dont le vrai `api-client.js` contre le vrai serveur) ; 1 scénario à porter avec Face ID (phase B). Tests existants de Work inchangés : 15/15 et 16/16.
+- Vérifié : compilation du Worker et des Functions (`npm run check:cloudflare`) ; essai local dans le moteur Cloudflare (stock, devis, refus, tâche planifiée, rapport). **Non vérifié** : Cloudflare réel, Stripe en mode test réel, transporteur, Discord réel, e-mails, iPhone.
+- `package.json` : scripts `test:backend` et `check:cloudflare` (aucune dépendance ajoutée). `.gitignore` : états `.wrangler/` des sous-dossiers. `docs/OWNERSHIP.md` : ligne `backend/`.
+- Aucun déploiement ; `main`, le domaine, Stripe et le site publié sont inchangés. `server/`, `drizzle/` et `admin.js` restent en place jusqu’à validation de leur retrait.
+
 ## 2026-11-24 — dépôt GitHub v2 et préparation du relais à Claude
 
 - Copie indépendante des 70 fichiers suivis de l’aperçu v4, source `e271bd63ee1ca9d806a921511fbc12900de4c14f`. Logo, photographies, polices, CSS, pages, démo, prototype et tests conservés ; aucun changement du site publié.

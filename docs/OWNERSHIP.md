@@ -6,6 +6,7 @@
 | `public/store/api-client.js`, `inventory.js`, parcours client | Work | Consommer le contrat commun ; aucune logique de confiance côté navigateur |
 | `server/`, `db/`, `drizzle/`, `app/api/`, `worker/` | Claude | Code hérité transmis pour audit et migration, aucune évolution backend par Work |
 | Futurs `/functions`, `/ops`, `/admin` | Claude | Réservés au backend, automatisations et SAYLESS STUDIO ; ne pas développer de doublon |
+| `backend/`, `tests/backend/` | Claude | Backend unique (code métier, migrations D1, tests) appelé par `/functions` et `/ops` ; Work consomme uniquement le contrat |
 | `public/store/admin.js` | Claude | Ancien prototype à remplacer/migrer ; pas d’extension par Work |
 | `tests/inventory.test.mjs` | Claude | Tests historiques à réutiliser et compléter sur D1/Stripe réels de test |
 | Tests frontend et script de consultation statique | Work | Couvrir les erreurs de service et les états clients |
