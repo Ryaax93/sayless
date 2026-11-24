@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 2026-11-24 (nuit) — Claude : SAYLESS STUDIO, connexion Face ID et inventaire guidé (PR n° 1)
+
+- `studio/` : première version de l’application, fidèle à la maquette validée (fond noir, rose pastel, étiquettes de taille, compteurs) et harmonisée avec la charte 2.0 (couleurs, SaylessDisplay, SaylessSans, logo officiel). Installable sur l’écran d’accueil de l’iPhone (manifeste, icônes), CSP stricte (`studio/_headers`).
+- Seuls les écrans branchés apparaissent : connexion Face ID, codes de secours, inventaire guidé, sécurité des sessions.
+- API `/api/admin/*` dans le Worker `ops/` (`backend/src/admin.mjs`) : inscription par code d’installation à usage unique, passkey vérifiée côté serveur (`backend/src/webauthn.mjs`, sans dépendance), sessions `__Host-` de 7 jours et 12 h d’inactivité, 10 codes de secours en empreinte, confirmation Face ID de moins de 5 minutes pour les actions sensibles, journalisation des refus.
+- Inventaire guidé : comptage S/M/L et mises de côté, écart avec les 26 théoriques, enregistrement par le registre de stock, limite Stripe proposée sans être appliquée.
+- Migration `0004_studio_auth.sql`. Tests `tests/backend/studio.test.mjs` (6, dont le portage du scénario t28) : `npm run test:backend` = 57/57. Essai local dans le moteur Cloudflare, en HTTPS, avec Chrome et un authentificateur Face ID virtuel : inscription, codes, accueil, inventaire guidé enregistré, déconnexion puis reconnexion ; cookie `__Host-` Secure, HttpOnly, SameSite=Strict. Deux défauts trouvés par cet essai et corrigés (champ effacé avant lecture, écran des codes). **Non testé** : vrai iPhone, domaine réel.
+- `npm run build:studio` (`ops/build-studio.mjs`, sortie `dist-studio/` non versionnée) ; `ops/wrangler.toml` sert STUDIO en ressources statiques.
+
 ## 2026-11-24 (soir) — Claude : décisions du fondateur intégrées (PR n° 1)
 
 - Zones : France métropolitaine hors Corse ; Monaco et outre-mer refusés avant paiement ; adresse hors zone saisie sur Stripe → commande « à vérifier » sans envoi ni remboursement automatique. Constats Corse/Monaco et sources : `docs/DONNEES-ET-SAUVEGARDES.md`.

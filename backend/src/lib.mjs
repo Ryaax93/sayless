@@ -3,6 +3,9 @@
 
 export const ERROR_STATUS = Object.freeze({
   invalid_request: 400, invalid_json: 400, invalid_signature: 400, invalid_event: 400,
+  unauthenticated: 401,
+  stepup_required: 403, invalid_setup_code: 403, unknown_credential: 403, passkey_rejected: 403, invalid_recovery_code: 403,
+  already_enrolled: 409, not_enrolled: 409, challenge_expired: 409,
   challenge_required: 403, challenge_failed: 403, payments_disabled: 403, invalid_origin: 403,
   not_found: 404, unknown_product: 404,
   sold_out: 409, held: 409, quote_expired: 409, quote_invalid: 409, price_changed: 409, quote_mismatch: 409,

@@ -10,6 +10,7 @@ import { relayOverdue } from './operations.mjs';
 import { applyRetention } from './retention.mjs';
 import { maybeDailyBackup } from './backup.mjs';
 import { createStripeClient } from './stripe.mjs';
+import { handleAdmin } from './admin.mjs';
 
 // Contexte d'exécution : liaisons Cloudflare + dépendances injectables (horloge, Stripe, relais).
 export function createContext(env, overrides = {}) {
@@ -90,10 +91,11 @@ export async function handlePublicApi(request, env, options = {}) {
   }
 }
 
-// Worker d'exploitation : webhook Stripe et santé. (L'API STUDIO arrivera dans ce Worker.)
+// Worker d'exploitation : API de SAYLESS STUDIO, webhook Stripe et santé.
 export async function handleOps(request, env, options = {}) {
   const { ctx, deps } = createContext(env, options.deps);
   const url = new URL(request.url);
+  if (url.pathname.startsWith('/api/admin/')) return handleAdmin(request, env, deps);
   if (request.method === 'POST' && url.pathname === '/webhooks/stripe') {
     const raw = await request.text();
     try {

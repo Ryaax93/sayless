@@ -48,6 +48,7 @@ yarn-error.log*
 __qa*
 
 /dist-storefront/
+/dist-studio/
 *.sqlite
 *.sqlite3
 *.db

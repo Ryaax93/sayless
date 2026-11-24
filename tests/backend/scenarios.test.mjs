@@ -406,7 +406,7 @@ test('t27 point relais : « disponible » distinct de « retiré », relance uni
   assert.deepEqual(kinds, ['parcel_at_relay', 'parcel_not_collected', 'parcel_picked_up', 'parcel_shipped']);
 });
 
-test.todo('t28 connexion Face ID (passkey), sessions et codes de secours — portage avec l’authentification STUDIO (phase B) ; scénario conservé dans la preuve de concept');
+// t28 (connexion Face ID, sessions, codes de secours) : porté dans tests/backend/studio.test.mjs (S01 à S04).
 
 test('t29 livre des recettes et données personnelles : export au centime, formule neutralisée, purge sans toucher à la compta', async () => {
   const b = await bench({ 'TEST-M': 4 });

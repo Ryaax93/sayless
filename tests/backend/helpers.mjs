@@ -9,7 +9,8 @@ import { handleOps, handlePublicApi, createContext } from '../../backend/src/rou
 import { StripeError } from '../../backend/src/stripe.mjs';
 import { recordInventory } from '../../backend/src/stock.mjs';
 
-const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql'];
+const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql'];
+const WITHOUT_CATALOG = MIGRATIONS.filter((m) => m !== '0002_catalog_drop01.sql');
 export const T0 = 1_800_000_000; // horloge simulée (secondes)
 export const ORIGIN = 'https://boutique.test';
 export const PII = { name: 'Client Test', email: 'client.test@example.invalid', phone: '+33100000000',
@@ -26,7 +27,7 @@ export async function startDatabases() {
 export const stopDatabases = () => mf?.dispose();
 export const backupStore = () => mf.getKVNamespace('BACKUPS');
 
-export async function migrate(db, files = [MIGRATIONS[0], MIGRATIONS[2]]) {
+export async function migrate(db, files = WITHOUT_CATALOG) {
   for (const file of files) {
     const text = await readFile(new URL(`../../backend/migrations/${file}`, import.meta.url), 'utf8');
     for (const part of text.split('--> statement-breakpoint').map((s) => s.trim()).filter(Boolean)) await db.prepare(part).run();
@@ -200,7 +201,7 @@ export const event = (type, objectId, object = 'checkout.session') => ({ id: rid
 export async function bench(stocks = { 'TEST-M': 1 }, { mode = 'open', productStatus = 'published', threshold = 2,
   payments = true, catalogSeed = false } = {}) {
   const real = await emptyDatabase();
-  await migrate(real, catalogSeed ? MIGRATIONS : [MIGRATIONS[0], MIGRATIONS[2]]);
+  await migrate(real, catalogSeed ? MIGRATIONS : WITHOUT_CATALOG);
   const db = downable(real);
   const clock = { t: T0, now() { return this.t; } };
   const stripe = new FakeStripe(clock);

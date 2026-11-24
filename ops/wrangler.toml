@@ -7,9 +7,16 @@ main = "worker.mjs"
 compatibility_date = "2026-05-15"
 workers_dev = true
 
+# Application SAYLESS STUDIO (construite par ops/build-studio.mjs dans dist-studio, non versionné).
+[assets]
+directory = "../dist-studio"
+run_worker_first = ["/api/*", "/webhooks/*", "/health"]
+
 [vars]
 ENVIRONMENT = "staging"
 PUBLIC_ORIGIN = "https://sayless-boutique.pages.dev"
+# STUDIO_ORIGIN et STUDIO_RP_ID : origine exacte de STUDIO (passkeys liées à ce domaine).
+# Par défaut : l'origine de la requête. En production : https://studio.saylessbrand.fr
 
 # Clé PUBLIQUE de sauvegarde (JWK RSA-OAEP), non secrète, fournie lors de l'étape « sauvegardes ».
 # BACKUP_PUBLIC_KEY = "{...}"

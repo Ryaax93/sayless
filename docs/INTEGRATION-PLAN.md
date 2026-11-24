@@ -23,7 +23,7 @@ Fondateur (iPhone, Mac) ─► studio.saylessbrand.fr (phase B : STUDIO + /api/a
 | Phase | Contenu | Responsable | Terminée quand |
 | --- | --- | --- | --- |
 | A — cette PR | Audit, contrat v1.1, backend unique, migrations, tests, compilation Cloudflare | Claude | Revue de Work et accord du fondateur |
-| B | STUDIO fonctionnel à partir de la maquette validée (harmonisée avec `DESIGN-SYSTEM.md`) : connexion Face ID, commandes, inventaire guidé, stock, finances, notifications, pause ; API d’administration | Claude | Tests + essai sur iPhone |
+| B | STUDIO fonctionnel à partir de la maquette validée (harmonisée avec `DESIGN-SYSTEM.md`). Déjà branchés : connexion Face ID, codes de secours, inventaire guidé. À suivre : commandes, stock, finances, notifications, pause | Claude | Tests + essai sur iPhone |
 | C | Discord, notifications push, e-mails Resend en test, rapport quotidien, exports, sauvegardes | Claude | Messages testés et validés par le fondateur |
 | D | Points relais, étiquettes et suivi (après pesée et choix du transporteur) | Claude | Bac à sable du transporteur |
 | E | Raccordement de la boutique au contrat v1.1 | Work | Tests frontend + parcours complet |

@@ -71,12 +71,12 @@ Travail livré sur `claude/integration-v2`. Rien n’est déployé ; `main`, le 
 | Origine | Nouveau test |
 | --- | --- |
 | Scénarios Claude t01–t27, t29 | `tests/backend/scenarios.test.mjs`, même numéro |
-| t28 Face ID, sessions, codes de secours | À porter avec l’authentification STUDIO (phase B) ; le scénario reste vert dans la preuve de concept |
+| t28 Face ID, sessions, codes de secours | `tests/backend/studio.test.mjs`, S01 à S04 (authentificateur logiciel, signatures réelles) |
 | Work 1, 2, 3, 4, 5, 7, 9, 10, 11, 13, 14, 15, 16 | `tests/backend/parity.test.mjs`, W01–W16 |
 | Work 6 (doublons et désordre) | t02, t07 |
 | Work 8 (abandon, échec, différé) | t03, t06 |
 | Work 12 (annulation et paiement concurrent) | t05 |
-| Work 15, volet administration | Avec STUDIO (phase B) ; volet écritures inter-sites couvert par W15 |
+| Work 15, volet administration | S05 (origine STUDIO, en-tête obligatoire, 401 sans session) ; volet boutique : W15 |
 | Contrat boutique ↔ serveur | C01–C04 |
 
 ## 8. Décisions du fondateur (24 novembre 2026)
