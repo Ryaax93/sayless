@@ -134,13 +134,17 @@ export async function handleOps(request, env, options = {}) {
     }
   }
   if (request.method === 'GET' && url.pathname === '/health') {
+    // Lisible par un service de surveillance externe gratuit : une tâche planifiée arrêtée
+    // (« late ») ne peut pas envoyer elle-même d'alerte.
     let database = 'ok';
+    let scheduler = 'unknown';
     try {
-      await getSettings(ctx.db);
+      const last = Number((await getSettings(ctx.db)).cron_last_run || 0);
+      scheduler = !last ? 'never' : deps.now() - last < 300 ? 'ok' : 'late';
     } catch {
       database = 'unavailable';
     }
-    return json({ ok: database === 'ok', database, stripe: deps.stripe ? (deps.stripe.live ? 'live' : 'test') : 'absent' });
+    return json({ ok: database === 'ok', database, scheduler, stripe: deps.stripe ? (deps.stripe.live ? 'live' : 'test') : 'absent' });
   }
   return json({ error: 'not_found' }, 404);
 }
@@ -169,6 +173,9 @@ export async function runScheduled(env, options = {}) {
   if (minute === 0) await step('relay_overdue', () => relayOverdue(ctx, deps));
   if (minute === 10) await step('retention', () => applyRetention(ctx, deps));
   await step('outbox', () => deliverOutbox(ctx, deps.senders, deps));
+  // Canaux réellement configurés sur ce Worker, déclarés pour la boutique (écriture seulement s'ils changent).
+  await step('channels', () => ctx.db.prepare(`UPDATE settings SET value = ? WHERE key = 'notify_channels' AND value <> ?`)
+    .bind(deps.channels.join(','), deps.channels.join(',')).run());
   // Battement de la tâche planifiée (écran Santé) : une écriture par minute, dans l'offre gratuite.
   await step('heartbeat', () => ctx.db.prepare(`UPDATE settings SET value = ? WHERE key = 'cron_last_run'`).bind(String(deps.now())).run());
   return report;

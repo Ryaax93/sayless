@@ -536,10 +536,16 @@ const screens = {
     const h = state.data.health;
     if (!h) return `${header('Santé du site', { back: ['more', 'Plus'] })}<div class="body">${errorBox()}${loadingBox()}</div>`;
     const tone = { ok: ['OK', ''], todo: ['À faire', 'wait'], wait: ['En attente', 'wait'], alert: ['Alerte', 'warn'] };
-    return `${header('Santé du site', { back: ['more', 'Plus'], right: `<span class="s">${esc(h.environment)}</span>` })}<div class="body fade">${errorBox()}
+    return `${header('Santé du site', { back: ['more', 'Plus'], right: `<span class="s">${esc(h.environment)}</span>` })}<div class="body fade">${errorBox()}${noticeBox()}
       <div class="sheet">${h.checks.map((c) => `<div class="row top-align"><span class="grow"><span class="p strong block">${esc(c.name)}</span><span class="s block">${esc(c.detail)}</span></span>${pill(...tone[c.state])}</div>`).join('')}</div>
       <section aria-labelledby="ouverture"><h2 class="sec" id="ouverture">Avant d’ouvrir la boutique 2.0</h2><div class="sheet">
         ${h.readiness.checks.map((c) => `<div class="row"><span class="dot ${c.ok ? 'rose' : c.blocker ? 'alerte' : 'muted'}"></span><span class="p grow">${esc(c.text)}</span>${c.ok ? '' : pill(c.blocker ? 'Bloquant' : 'Conseillé', c.blocker ? 'warn' : '')}</div>`).join('')}</div></section>
+      ${state.data.backups?.configured ? `<section aria-labelledby="copies"><h2 class="sec" id="copies">Sauvegardes chiffrées</h2><div class="sheet">
+        ${state.data.backups.backups.length ? state.data.backups.backups.slice(0, 5).map((x) => `<div class="row"><span class="grow"><span class="p block">${esc(x.name.startsWith('monthly/') ? 'Mensuelle' : 'Quotidienne')} ${esc(x.name.split('/')[1])}</span>
+        <span class="s block">${x.checks === 'ok' ? 'Vérifiée' : 'Non vérifiée'}${x.rows ? ` · ${esc(x.rows)} lignes` : ''}${x.bytes ? ` · ${esc(Math.ceil(x.bytes / 1024))} Ko` : ''}</span></span>
+        ${btn('backup-download', 'Télécharger', { cls: 'pill tall', fk: `bk:${x.name}`, extra: `data-value="${esc(x.name)}"` })}</div>`).join('')
+      : '<div class="row"><span class="s">Première copie après 3 h du matin.</span></div>'}</div>
+        <p class="note">Copie illisible sans ta clé privée, gardée hors ligne. Télécharge-en une chaque semaine et range-la hors de Cloudflare.</p></section>` : ''}
       ${nav('audit', `<span class="grow"><span class="p strong block">Historique</span><span class="s block">Chaque action datée, impossible à modifier ou effacer</span></span>${I.chev}`, { cls: 'sheet row action padded' })}</div>`;
   },
 
@@ -550,7 +556,7 @@ const screens = {
       stock_adjustment: 'Ajustement de stock', view_customer_contact: 'Coordonnées consultées', view_archived_contact: 'Coordonnées archivées consultées', export_livre_recettes: 'Export du livre des recettes',
       export_orders: 'Export des commandes', order_prepared: 'Commande préparée', order_shipped: 'Commande expédiée', order_delivered: 'Commande remise', order_review_resolved: 'Commande vérifiée',
       refund_requested: 'Remboursement demandé', refund_recorded: 'Remboursement enregistré', return_check: 'Retour contrôlé', shop_opened: 'Boutique ouverte', shop_paused: 'Boutique en pause',
-      settings_changed: 'Réglages modifiés', terms_published: 'CGV publiées', legacy_link_sale: 'Vente lien 1.0', legacy_sync: 'Synchronisation lien 1.0', drop_declared: 'Quantités déclarées',
+      settings_changed: 'Réglages modifiés', backup_downloaded: 'Sauvegarde téléchargée', terms_published: 'CGV publiées', legacy_link_sale: 'Vente lien 1.0', legacy_sync: 'Synchronisation lien 1.0', drop_declared: 'Quantités déclarées',
       product_drafted: 'Produit en brouillon', product_status: 'Statut de produit', price_changed: 'Prix modifié', finance_settings: 'Déclarations financières', push_subscribed: 'Notifications activées',
       request_received: 'Demande reçue', request_status: 'Demande traitée', notification_resolved: 'Alerte traitée', purge_customer_contacts: 'Coordonnées purgées', import_sale: 'Vente importée' };
     return `${header('Historique', { back: ['health', 'Santé du site'] })}<div class="body fade">${errorBox()}<div class="sheet">
@@ -675,7 +681,7 @@ const LOADERS = {
   notifications: async () => ({ notifications: await api('/api/admin/notifications') }),
   drops: async () => ({ drops: await api('/api/admin/drops') }),
   performance: async () => ({ performance: await api('/api/admin/performance') }),
-  health: async () => ({ health: await api('/api/admin/health') }),
+  health: async () => { const [health, backups] = await Promise.all([api('/api/admin/health'), api('/api/admin/backups')]); return { health, backups }; },
   audit: async () => ({ audit: await api('/api/admin/audit') }),
   settings: async () => ({ settings: await api('/api/admin/settings') }),
   requests: async () => ({ requests: await api('/api/admin/requests') }),
@@ -746,8 +752,8 @@ const cents = (text) => {
   const m = text.replace(/\s|€/g, '').replace(',', '.').match(/^\d+(\.\d{1,2})?$/);
   return m ? Math.round(Number(m[0]) * 100) : null;
 };
-function download(name, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+function download(name, text, type = 'text/csv;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   document.body.append(a);
   a.click();
@@ -921,6 +927,8 @@ const actions = {
   'codes-new': () => { if (!window.confirm('Générer 10 nouveaux codes ? Les anciens ne fonctionneront plus.')) return undefined;
     return sensitive(async () => { const r = await api('/api/admin/recovery-codes', {}); set({ codes: r.recovery_codes, screen: 'codes' }); }); },
   'request-open': (el) => { const id = el.dataset.value; return sensitive(async () => { const r = await api('/api/admin/requests/open', { id }); set({ openedRequest: { id, value: r.request } }); }); },
+  'backup-download': (el) => { const name = el.dataset.value; return sensitive(async () => { const r = await api('/api/admin/backups/download', { name });
+    download(r.filename, r.content, 'application/json'); set({ notice: `Copie téléchargée : ${r.filename}` }); }); },
   'request-done': (el) => { const id = el.dataset.value; return guarded(async () => { await api('/api/admin/requests/status', { id, status: 'answered' }); await load('requests'); }); },
 };
 function deviceLabel() {

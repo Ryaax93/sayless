@@ -3,7 +3,8 @@
 Démarre le Worker d'exploitation en local (workerd via `wrangler dev`, HTTPS, base D1 éphémère),
 puis parcourt STUDIO comme le fondateur : inscription Face ID, inventaire guidé avec confirmation,
 écrans principaux, iPhone (390 px) et ordinateur (1440 px). Vérifie l'absence d'erreur et de
-violation CSP, la conservation du focus et l'annonce des écrans.
+violation CSP, la conservation du focus et l'annonce des écrans. Télécharge enfin une copie
+chiffrée de test depuis l'écran Santé et la fait relire par scripts/restore-backup.mjs.
 
 Aucune donnée réelle : base locale jetable, secrets générés à chaque exécution et jamais écrits
 ailleurs que dans un dossier temporaire. Le capteur Face ID est simulé par Chrome : ce test ne
@@ -38,18 +39,27 @@ def main():
         raise SystemExit("ops/.dev.vars existe déjà : arrêt pour ne rien écraser.")
     env = dict(os.environ, CI="true", WRANGLER_SEND_METRICS="false")
     run(["node", "ops/build-studio.mjs"])
+    keys = tempfile.mkdtemp(prefix="studio-backup-")
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    run(["node", "tests/browser/make_backup.mjs", keys, day])
     try:
+        with open(os.path.join(keys, "public.json")) as f:
+            public = f.read()
         with open(vars_path, "w") as f:
             f.write("\n".join([f"APP_SECRET={b64(32)}", f"PII_KEY={b64(32)}", f"ADMIN_SETUP_CODE={SETUP}",
                                f"STUDIO_ORIGIN={ORIGIN}", "STUDIO_RP_ID=localhost", "ENVIRONMENT=local",
-                               "TURNSTILE_BYPASS=test-only"]) + "\n")
+                               "TURNSTILE_BYPASS=test-only", f"BACKUP_PUBLIC_KEY='{public}'"]) + "\n")
         run(["npx", "wrangler", "d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "-c", "ops/wrangler.toml"], env=env)
+        with open(os.path.join(keys, "metadata.json")) as f:
+            metadata = f.read()
+        run(["npx", "wrangler", "kv", "key", "put", f"daily/{day}", "--binding", "BACKUPS", "--path", os.path.join(keys, "copie.json"),
+             "--metadata", metadata, "--local", "--persist-to", state, "-c", "ops/wrangler.toml"], env=env)
         server = subprocess.Popen(["npx", "wrangler", "dev", "-c", "ops/wrangler.toml", "--local", "--persist-to", state,
                                    "--port", str(PORT), "--local-protocol", "https", "--ip", "127.0.0.1"], cwd=ROOT, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=os.setsid)
         try:
             wait_ready()
-            browse(lambda: seed(state, env))
+            browse(lambda: seed(state, env), keys)
         finally:
             os.killpg(server.pid, signal.SIGTERM)
             server.wait(timeout=20)
@@ -57,6 +67,7 @@ def main():
         if os.path.exists(vars_path):
             os.remove(vars_path)
         shutil.rmtree(state, ignore_errors=True)
+        shutil.rmtree(keys, ignore_errors=True)
     print(f"Captures : {SHOTS}")
 
 
@@ -97,11 +108,11 @@ def wait_ready():
     raise SystemExit("le Worker local n'a pas démarré")
 
 
-def browse(seed_orders):
+def browse(seed_orders, keys):
     problems = []
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--no-first-run", "--ignore-certificate-errors"])
-        context = browser.new_context(ignore_https_errors=True, viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="fr-FR",
+        context = browser.new_context(ignore_https_errors=True, accept_downloads=True, viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="fr-FR",
                                       timezone_id="Europe/Paris")
         page = context.new_page()
         page.on("console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type in ("error", "warning") else None)
@@ -180,6 +191,21 @@ def browse(seed_orders):
             page.wait_for_selector(selector)
             page.wait_for_timeout(900)
             shot(name)
+        # Sauvegarde : copie listée, téléchargée sous Face ID, identique à celle du stockage, relisible.
+        page.goto(f"{ORIGIN}/#/sante")
+        page.wait_for_selector("[data-action=backup-download]")
+        page.wait_for_timeout(600)
+        with page.expect_download() as info:
+            page.click("[data-action=backup-download]")
+        target = os.path.join(keys, "telechargee.json")
+        info.value.save_as(target)
+        with open(target) as a, open(os.path.join(keys, "copie.json")) as b:
+            assert a.read() == b.read(), "copie téléchargée différente de la copie stockée"
+        page.wait_for_selector("text=Copie téléchargée")
+        shot("14b-sante-sauvegarde")
+        drill = run(["node", "scripts/restore-backup.mjs", "--backup", target, "--key", os.path.join(keys, "private.json")])
+        assert "Contrôle réussi" in drill.stdout, drill.stdout + drill.stderr
+
         page.goto(f"{ORIGIN}/#/")
         page.wait_for_selector("#drop-title")
         available = page.locator("svg.strip rect.bar.available").count()

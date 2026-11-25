@@ -30,6 +30,11 @@ yarn-error.log*
 .env*
 .dev.vars*
 *.pem
+# Fichiers de scripts/generate-secrets.mjs (écrits hors du dépôt ; filet de sécurité en cas de copie)
+CLE-PRIVEE-SAUVEGARDES*.json
+worker-secrets*.json
+pages-secrets*.json
+sayless-secrets-*/
 
 # Checkout-local tool state
 /.wrangler/

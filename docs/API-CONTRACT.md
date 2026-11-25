@@ -1,6 +1,18 @@
-# Contrat commun de la boutique — v1.2
+# Contrat commun de la boutique — v1.3
 
-**Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 = revue de Claude, implémentée dans `backend/` et testée sur D1 locale (dont le vrai `api-client.js` contre le vrai serveur).** Rien n’est déployé. À valider par Work (client) et par le fondateur pour les points commerciaux marqués ★. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+**Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 et v1.2 implémentées par Claude et consommées par Work (`work/frontend-api-v1-2`) ; v1.3 = corrections de la revue de Work, à valider par Work.** Toutes les évolutions v1.3 sont additives : un client v1.2 continue de fonctionner (vérifié en rejouant les 8 tests d’intégration de Work sur la branche de vérification). Rien n’est déployé. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+
+## Changements v1.3 (revue de Work, 25 novembre) — à valider par Work
+
+- **CGV versionnées** : le devis renvoie `terms_version` (version en vigueur, signée dans le jeton). Une nouvelle tentative exige `terms_version` égal à celui du devis **et** à la version en vigueur (`409 terms_outdated`). Sans CGV publiées : `503 not_configured` dès le devis. Le texte de chaque version est conservé côté serveur, sans modification possible. Proposition : la boutique affiche la version reçue dans le devis et l’envoie telle quelle.
+- **Reprise d’une tentative** : la clé d’idempotence est cherchée **avant** l’expiration du devis. Même clé et même contenu = même session Stripe et même réservation, même après 10 minutes. Un devis expiré n’ouvre jamais une **nouvelle** tentative (`409 quote_expired`).
+- **`409 attempt_closed`** porte désormais `payment_status` (mêmes valeurs que `/api/checkout/status`) et, si la tentative a une session Stripe, `session_id` : la boutique peut afficher la page `/merci` d’une tentative payée au lieu de proposer un nouvel achat.
+- **Points relais** : `GET /api/relay-points` applique les mêmes refus que le devis (`422 postcode_required`, `422 destination_not_supported`) et écarte les points fermés ou hors zone. Chaque point a une adresse stable : `{"id", "name", "network", "postcode", "city", "address": {"line1", "line2", "postcode", "city", "country"}}`. Le devis renvoie la même `address` dans `relay`. Le point choisi est figé dans la commande.
+- **Chiffrement obligatoire** : sans clé de chiffrement valide des coordonnées, aucune tentative n’est ouverte (`503 not_configured`).
+- **Inventaire de tout le produit** : tant qu’une taille du produit n’est pas confirmée, devis et réservation sont refusés (`503 stock_unavailable`), comme le stock public.
+- **Suivi et demandes raccordés** (actifs seulement quand l’envoi d’e-mails est configuré, sinon `503 not_configured` comme avant) : voir les sections ci-dessous. Lien de suivi envoyé par e-mail : `<origine de la boutique>/#/suivi?t=<jeton>` ; la boutique lit `t` dans le fragment et appelle `GET /api/order` avec `Authorization: Bearer <jeton>`.
+- **Moyens de paiement** : carte bancaire, avec Apple Pay et Google Pay sur les appareils compatibles. **Klarna exclu** (décision du DROP 01).
+- **Portée de `total_available`** : total exact **du produit demandé** (`product_id`). Pour plusieurs produits dans un même drop, la boutique additionne les produits du drop ; l’épuisement définitif (`drop_status = sold_out`) est déjà calculé à l’échelle du drop.
 
 ## Changements v1.2 (décisions du fondateur, 24 novembre)
 
@@ -17,7 +29,7 @@
 - Ajout de `POST /api/checkout/status` pour la page `/merci`.
 - Ajout de codes d’erreur : `quote_invalid`, `quote_mismatch`, `checkout_in_progress`, `attempt_closed`, `terms_outdated`, `hold_limit`, `quantity_not_supported`, `destination_not_supported`, `relay_unavailable`, `challenge_unavailable`, `not_configured`, `invalid_origin`, `unsupported_media_type`, `payload_too_large`.
 - Message de pause validé par le fondateur ; lecture du stock limitée aux vues d’achat (quota gratuit).
-- Moyens de paiement fixés par la session : carte, Apple Pay et Google Pay ; pas de Klarna.
+- Moyens de paiement fixés par la session : carte, Apple Pay et Google Pay ; Klarna exclu.
 
 ## Principes
 
@@ -81,9 +93,12 @@ Aucune coordonnée personnelle : seul le code postal de livraison est demandé p
   "total_cents": 8350,
   "shipping": "home",
   "relay": null,
+  "terms_version": "<version des CGV en vigueur (v1.3)>",
   "expires_at": "<ISO, 10 minutes>"
 }
 ```
+
+Relais (v1.3) : `"relay": {"id", "label", "network", "postcode", "city", "address": {"line1", "line2", "postcode", "city", "country"}}`.
 
 - Le récapitulatif affiché avant « Payer » est **cette réponse**. Le devis n’écrit rien en base.
 - Tarifs validés pour une pièce : relais 490, domicile 850. Paniers de plusieurs pièces refusés (`422 quantity_not_supported`, champ `max_items`) : une pièce par commande au lancement, validé par le fondateur.
@@ -93,7 +108,7 @@ Aucune coordonnée personnelle : seul le code postal de livraison est demandé p
 
 ## Points relais
 
-`GET /api/relay-points?postcode=75016&country=FR` → `{"points": [{"id", "name", "network", …}]}` depuis le fournisseur choisi après la pesée. Choix accessible en liste en complément d’une carte. Aucun point fictif. Fournisseur absent : `503 relay_unavailable`.
+`GET /api/relay-points?postcode=75016&country=FR` → `{"points": [{"id", "name", "network", "postcode", "city", "address": {"line1", "line2", "postcode", "city", "country"}}]}` depuis le fournisseur choisi après la pesée. Mêmes refus de destination que le devis (`422 postcode_required`, `422 destination_not_supported`) ; points fermés ou hors zone écartés (v1.3). Choix accessible en liste en complément d’une carte. Aucun point fictif. Fournisseur absent : `503 relay_unavailable`.
 
 ## Checkout Stripe
 
@@ -110,7 +125,7 @@ Aucune coordonnée personnelle : seul le code postal de livraison est demandé p
 }
 ```
 
-Côté serveur, dans l’ordre : devis signé et non expiré ; contenu identique au devis (`quote_mismatch`) ; CGV ; reprise si la clé existe déjà (même contenu → même session, sans nouveau Turnstile ; contenu différent → `idempotency_conflict`) ; boutique ouverte ; paiements ouverts ; limite d’abus ; Turnstile ; prix relus (`price_changed`) ; puis, en un lot atomique, commande, lignes et réservations. Ensuite la session Stripe est créée avec la clé `sayless-checkout-<commande>` : carte uniquement (Apple Pay et Google Pay compris), sans Klarna, expiration à 30,5 minutes ; la réservation dure 32 minutes.
+Côté serveur, dans l’ordre (v1.3) : devis authentique (signature) ; **reprise si la clé existe déjà**, même devis expiré (même contenu → même session et même réservation, sans nouveau Turnstile ; contenu différent → `idempotency_conflict`) ; puis, pour une nouvelle tentative seulement : devis non expiré (`quote_expired`) ; contenu identique au devis (`quote_mismatch`) ; CGV en vigueur et identiques au devis (`terms_outdated`) ; boutique ouverte ; paiements ouverts ; chiffrement des coordonnées prêt ; limite d’abus ; Turnstile ; prix relus (`price_changed`) ; puis, en un lot atomique, commande, lignes et réservations. Ensuite la session Stripe est créée avec la clé `sayless-checkout-<commande>` : carte uniquement (Apple Pay et Google Pay compris), sans Klarna, expiration à 30,5 minutes ; la réservation dure 32 minutes.
 
 Une réponse Stripe incertaine garde la réservation : seule une confirmation par Stripe (session retrouvée par sa clé puis expirée, ou refus explicite) la libère.
 
@@ -123,7 +138,7 @@ Réponse : `{"url": "https://checkout.stripe.com/...", "order_reference": "SL-XX
 | 409 `quote_expired`, `quote_invalid`, `price_changed`, `quote_mismatch` | Recalculer le devis, l’afficher et redemander « Payer » |
 | 409 `idempotency_conflict` | Ne pas réessayer automatiquement ; nouvelle tentative avec une nouvelle clé |
 | 409 `checkout_in_progress` | Réessayer avec la même clé après `Retry-After` (2 s) |
-| 409 `attempt_closed` | La tentative est terminée (`order_reference` fourni) : nouvelle clé et nouveau devis |
+| 409 `attempt_closed` | La tentative est terminée : `order_reference`, `payment_status` et, si elle existe, `session_id` (v1.3). Payée : afficher `/merci` ; sinon nouvelle clé et nouveau devis |
 | 409 `terms_outdated` | Recharger les CGV et redemander l’acceptation |
 | 422 `invalid_items`, `quantity_not_supported`, `destination_not_supported`, `postcode_required` | Corriger le panier, le code postal ou la destination ; afficher « Livraison en France métropolitaine, hors Corse pour le moment » |
 | 422 `invalid_relay` / `relay_required` | Revenir au choix du relais |
@@ -140,12 +155,14 @@ Réponse : `{"url": "https://checkout.stripe.com/...", "order_reference": "SL-XX
 - Retour Stripe : `/merci?ref=<order_reference>&session_id={CHECKOUT_SESSION_ID}` et `/commande-annulee?ref=<order_reference>`.
 - `POST /api/checkout/status` avec `{"order_reference", "session_id"}` (les deux sont exigés ensemble) → `{"order_reference", "payment_status": "pending | processing | paid | review | expired | failed | refunded", "updated_at"}`. Aucune donnée personnelle. Le serveur peut relire Stripe pour accélérer la confirmation. Afficher « Confirmation en cours » tant que `pending` ou `processing`.
 - L’annulation dans le navigateur ne libère rien : expiration, confirmation Stripe et balayage font autorité.
-- `POST /api/order/lookup` (référence + e-mail, réponse générique, lien d’accès à durée limitée par e-mail) et `GET /api/order` (en-tête `Authorization: Bearer <jeton du lien>`, jamais dans l’URL envoyée au serveur) : prévus. Ils répondent `503 not_configured` tant que l’envoi d’e-mails n’est pas raccordé et testé.
+- `POST /api/order/lookup` `{"reference", "email"}` → toujours `200 {"accepted": true}`, que la commande existe ou non (aucune énumération). Si la référence et l’adresse correspondent, un lien valable 30 minutes part par e-mail : `<origine>/#/suivi?t=<jeton>`. Limité à 10 demandes par client et par 10 minutes.
+- `GET /api/order` avec `Authorization: Bearer <jeton>` → `{"order_reference", "payment_status", "items": [{"size", "quantity"}], "shipping", "relay": {"name", "city", "postcode"} | null, "steps": [{"step": "prepared | shipped | delivered | returned", "at"}], "tracking": {"carrier", "number"} | null, "updated_at"}`. Aucune donnée personnelle. Jeton absent, faux ou expiré : `401 unauthenticated`.
+- Les deux routes répondent `503 not_configured` tant que l’envoi d’e-mails (Resend, domaine vérifié) et le chiffrement ne sont pas configurés.
 - Numérotation : `order_reference` publique et aléatoire pour le client ; numéro séquentiel (0001…) attribué au paiement pour STUDIO et la comptabilité.
 
 ## Demandes et retours
 
-`POST /api/requests` (`type = contact | return | withdrawal`, Turnstile) : prévu avec preuve durable de réception. `503 not_configured` tant que le stockage et les e-mails ne sont pas raccordés et testés ; la boutique n’affiche jamais « envoyé » sur une erreur. Le formulaire de rétractation reste utilisable sans motif.
+`POST /api/requests` `{"type": "contact | return | withdrawal", "order_reference"?, "name", "email", "message", "turnstile"}` → `200 {"reference": "R-XXXX-XXXX", "type", "received_at"}` **seulement après l’enregistrement** de la demande (coordonnées et message chiffrés). Un accusé de réception part aussitôt par e-mail (support durable, exigé pour la rétractation). `message` obligatoire sauf pour une rétractation (sans motif) ; champ invalide : `400 invalid_request` avec `field`. Limité à 5 demandes par client et par 10 minutes. `503 not_configured` tant que l’envoi d’e-mails et le chiffrement ne sont pas configurés ; la boutique n’affiche jamais « envoyé » sur une erreur.
 
 Un retour et un remboursement sont distincts. Un remboursement ne remet jamais une pièce en stock ; seul un contrôle physique « revendable » enregistré dans STUDIO le fait, une seule fois et dans la limite de la quantité vendue. Les remboursements restent décidés par le fondateur.
 

@@ -2,12 +2,13 @@
 // notifications, santé, réglages, drops, performances, demandes. Données de TEST uniquement.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { event, fakeMail, PII, startDatabases, stopDatabases } from './helpers.mjs';
+import { createKV, event, fakeMail, PII, startDatabases, stopDatabases } from './helpers.mjs';
 import { SoftAuthenticator, studio } from './studio-helpers.mjs';
 import { deliverOutbox } from '../../backend/src/notify.mjs';
 import { resendSender } from '../../backend/src/email.mjs';
 import { encryptPush, pushSender, vapidAuthorization } from '../../backend/src/push.mjs';
 import { b64url, fromB64url } from '../../backend/src/lib.mjs';
+import { maybeDailyBackup, openBackup } from '../../backend/src/backup.mjs';
 
 before(startDatabases);
 after(stopDatabases);
@@ -280,4 +281,40 @@ test('U08 demandes et suivi : accusé de réception par e-mail après enregistre
   await b.call('POST', `/api/admin/orders/${id}/fulfil`, { step: 'shipped', carrier: 'Transporteur test', tracking: 'TEST123456' });
   await deliverOutbox(ctx, b.deps.senders, deps);
   assert.match(mail.sent.at(-1).body.text, /Numéro de suivi : TEST123456/);
+});
+
+test('U09 sauvegardes dans STUDIO : liste des copies vérifiées, téléchargement sous Face ID et journalisé, copie relisible par la seule clé privée', async () => {
+  const b = await signedIn();
+  assert.deepEqual((await b.call('GET', '/api/admin/backups')).body, { configured: false, backups: [] }, 'rien d’affiché tant que non configuré');
+  const keys = await crypto.subtle.generateKey({ name: 'RSA-OAEP', modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['encrypt', 'decrypt']);
+  const kv = createKV();
+  Object.assign(b.env, { BACKUPS: kv, BACKUP_PUBLIC_KEY: JSON.stringify(await crypto.subtle.exportKey('jwk', keys.publicKey)) });
+  await b.inventory({ [SKU.S]: 2, [SKU.M]: 2, [SKU.L]: 2 });
+  const backupHealth = async () => (await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'Sauvegardes');
+  assert.equal((await backupHealth()).state, 'wait', 'configurées, première copie attendue');
+  const { ctx, deps } = b.context();
+  const date = await maybeDailyBackup(ctx, deps);
+  assert.ok(date);
+  assert.deepEqual(await backupHealth(), { name: 'Sauvegardes', state: 'ok', detail: `Dernière copie vérifiée : ${date} ; 1 copie(s) conservée(s)` });
+  const list = (await b.call('GET', '/api/admin/backups')).body;
+  assert.equal(list.configured, true);
+  assert.deepEqual(list.backups.map((x) => [x.name, x.checks]), [[`daily/${date}`, 'ok']]);
+  assert.ok(list.backups[0].rows > 0 && list.backups[0].bytes > 0);
+  const name = `daily/${date}`;
+  b.clock.t += 400; // la confirmation Face ID de l'inventaire a expiré
+  assert.equal((await b.call('POST', '/api/admin/backups/download', { name })).body.error, 'stepup_required', 'Face ID exigé');
+  assert.equal((await b.sensitive('POST', '/api/admin/backups/download', { name: '../settings' })).body.error, 'invalid_request');
+  assert.equal((await b.sensitive('POST', '/api/admin/backups/download', { name: 'daily/2020-01-01' })).status, 404);
+  const got = await b.sensitive('POST', '/api/admin/backups/download', { name });
+  assert.equal(got.status, 200);
+  assert.equal(got.body.filename, `sayless-sauvegarde-daily-${date}.json`);
+  assert.equal(got.body.content, await kv.get(name), 'copie remise telle quelle, toujours chiffrée');
+  assert.ok(!got.body.content.includes('ZH-PINK'), 'aucune donnée lisible sans la clé privée');
+  const dump = await openBackup(got.body.content, await crypto.subtle.exportKey('jwk', keys.privateKey));
+  assert.ok(dump.tables.inventory.length === 3);
+  const audit = (await b.call('GET', '/api/admin/audit')).body.entries.filter((e) => e.action === 'backup_downloaded');
+  assert.deepEqual(audit.map((e) => e.target), [name]);
+  b.clock.t += 37 * 3600; // aucune copie depuis : la santé du site alerte
+  await b.login(b.auth);
+  assert.equal((await backupHealth()).state, 'alert');
 });

@@ -10,7 +10,7 @@ const b64 = (bytes) => Buffer.from(bytes).toString('base64url');
 const sha = async (bytes) => new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 
 // ---------- CBOR minimal (encodeur de test) ----------
-function cbor(value) {
+export function cbor(value) {
   const out = [];
   const head = (major, n) => {
     if (n < 24) out.push((major << 5) | n);
@@ -27,7 +27,7 @@ function cbor(value) {
   walk(value);
   return new Uint8Array(out);
 }
-function rawToDer(raw) {
+export function rawToDer(raw) {
   const int = (b) => { let i = 0; while (i < b.length - 1 && b[i] === 0) i += 1; let v = b.slice(i); if (v[0] & 0x80) v = new Uint8Array([0, ...v]); return [0x02, v.length, ...v]; };
   const body = [...int(raw.slice(0, 32)), ...int(raw.slice(32))];
   return new Uint8Array([0x30, body.length, ...body]);

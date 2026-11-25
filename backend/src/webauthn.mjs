@@ -38,7 +38,16 @@ export function cborDecode(bytes) {
       case 2: { const n = length(info); if (pos + n > bytes.length) refuse('cbor_malformed'); const v = bytes.slice(pos, pos + n); pos += n; return v; }
       case 3: { const n = length(info); if (pos + n > bytes.length) refuse('cbor_malformed'); const v = new TextDecoder().decode(bytes.slice(pos, pos + n)); pos += n; return v; }
       case 4: { const n = length(info); return Array.from({ length: n }, () => item(depth + 1)); }
-      case 5: { const n = length(info); const m = new Map(); for (let i = 0; i < n; i += 1) { const k = item(depth + 1); m.set(k, item(depth + 1)); } return m; }
+      case 5: {
+        const n = length(info);
+        const m = new Map();
+        for (let i = 0; i < n; i += 1) {
+          const k = item(depth + 1);
+          if (m.has(k)) refuse('cbor_duplicate_key'); // clé en double : lecture ambiguë, refusée
+          m.set(k, item(depth + 1));
+        }
+        return m;
+      }
       case 7: if (info === 20) return false; if (info === 21) return true; if (info === 22) return null; return refuse('cbor_simple');
       default: return refuse('cbor_type');
     }
@@ -60,9 +69,17 @@ export function parseAuthData(bytes) {
     const idLength = (bytes[53] << 8) | bytes[54];
     if (idLength < 16 || idLength > 1023 || 55 + idLength > bytes.length) refuse('credential_id');
     const id = bytes.slice(55, 55 + idLength);
-    const { value, end } = cborDecode(bytes.slice(55 + idLength));
+    const rest = bytes.slice(55 + idLength);
+    const { value, end } = cborDecode(rest);
     out.credential = { aaguid: bytes.slice(37, 53), id, publicKey: value };
-    out.trailing = bytes.length - (55 + idLength + end);
+    let used = end;
+    // Extensions de l'authentificateur (drapeau ED) : une carte CBOR, puis plus rien.
+    if (flags.ed) {
+      const ext = cborDecode(rest.slice(end));
+      if (!(ext.value instanceof Map)) refuse('extensions');
+      used += ext.end;
+    }
+    out.trailing = rest.length - used;
   }
   return out;
 }
@@ -127,6 +144,8 @@ async function checkAuthenticator(auth, rpId, requireUV) {
   if (!same(auth.rpIdHash, await sha256(enc.encode(rpId)))) refuse('rp_id');
   if (!auth.flags.up) refuse('user_presence');
   if (requireUV && !auth.flags.uv) refuse('user_verification');
+  // Passkey sauvegardée (BS) sans être sauvegardable (BE) : combinaison impossible, refusée.
+  if (auth.flags.bs && !auth.flags.be) refuse('backup_state');
 }
 
 const bytesOf = (value, name) => {

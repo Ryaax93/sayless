@@ -197,6 +197,17 @@ async function financeView(ctx, deps) {
     cumulative: [...months].map(([month, cents]) => ({ month, net_cents: cents })), stripe };
 }
 
+// Sauvegardes : en erreur, en retard (aucune copie vérifiée depuis 36 h), à jour, en attente de la
+// première copie (après 3 h, heure de Paris), ou à configurer.
+function backupCheck({ error, verified, now, configured, kept }) {
+  const name = 'Sauvegardes';
+  if (error) return { name, state: 'alert', detail: `Dernière erreur : ${error}` };
+  if (verified && now - verified > 36 * 3600) return { name, state: 'alert', detail: `Aucune copie vérifiée depuis le ${iso(verified).slice(0, 10)}` };
+  if (verified) return { name, state: 'ok', detail: `Dernière copie vérifiée : ${iso(verified).slice(0, 10)}${kept === null ? '' : ` ; ${kept} copie(s) conservée(s)`}` };
+  if (configured) return { name, state: 'wait', detail: 'Configurées ; première copie après 3 h du matin' };
+  return { name, state: 'todo', detail: 'Clé publique et espace à configurer' };
+}
+
 async function readJsonBody(request, size) {
   return readJson(request, size);
 }
@@ -404,11 +415,27 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         { name: 'Notifications iPhone', state: pushReady(ctx) ? 'ok' : 'todo', detail: pushReady(ctx) ? 'Clés configurées' : 'Clés VAPID à saisir' },
         { name: 'E-mails clients', state: emailReady(ctx) ? 'ok' : 'todo', detail: emailReady(ctx) ? `Expéditeur ${ctx.EMAIL_FROM}` : 'Resend et domaine vérifié à configurer' },
         { name: 'File d’envoi', state: dead ? 'alert' : 'ok', detail: dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente` },
-        { name: 'Sauvegardes', state: settings.backup_last_error ? 'alert' : verified ? 'ok' : 'todo', detail: settings.backup_last_error
-          ? `Dernière erreur : ${settings.backup_last_error}` : verified ? `Dernière copie vérifiée : ${iso(verified).slice(0, 10)}${backups ? ` ; ${backups.length} copie(s) conservée(s)` : ''}` : 'Clé publique et espace à configurer' },
+        backupCheck({ error: settings.backup_last_error, verified, now, configured: Boolean(ctx.BACKUPS && ctx.BACKUP_PUBLIC_KEY), kept: backups?.length ?? null }),
         { name: 'Conservation des données', state: settings.retention_enabled === '1' ? 'ok' : 'wait', detail: settings.retention_enabled === '1' ? 'Purge automatique active' : 'Purge coupée, en attente de ta validation des durées' },
       ];
       return json({ checks, readiness: ready, environment: ctx.ENVIRONMENT ?? 'local', origins: { shop: ctx.PUBLIC_ORIGIN ?? null, studio: config.origin } });
+    }
+    // Copies chiffrées : liste, et téléchargement (copie hors ligne hebdomadaire). Illisibles sans
+    // la clé privée du fondateur ; le téléchargement est tout de même confirmé par Face ID et noté.
+    case 'GET /api/admin/backups': {
+      if (!ctx.BACKUPS) return json({ configured: false, backups: [] });
+      const list = await listBackups(ctx.BACKUPS);
+      return json({ configured: Boolean(ctx.BACKUP_PUBLIC_KEY), backups: list.sort((a, b) => b.name.localeCompare(a.name))
+        .map((x) => ({ name: x.name, created_at: x.created_at ? iso(x.created_at) : null, bytes: x.bytes ?? null, checks: x.checks ?? null, rows: x.rows ?? null })) });
+    }
+    case 'POST /api/admin/backups/download': {
+      const body = await readJsonBody(request);
+      requireStepUp();
+      if (!ctx.BACKUPS || typeof body.name !== 'string' || !/^(daily\/\d{4}-\d{2}-\d{2}|monthly\/\d{4}-\d{2})$/.test(body.name)) throw fail('invalid_request');
+      const sealed = await ctx.BACKUPS.get(body.name);
+      if (sealed === null) throw fail('not_found');
+      await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'backup_downloaded', body.name, 'ok')]);
+      return json({ filename: `sayless-sauvegarde-${body.name.replace('/', '-')}.json`, content: sealed });
     }
     case 'GET /api/admin/audit': {
       const before = Number(url.searchParams.get('before') ?? 0) || Number.MAX_SAFE_INTEGER;

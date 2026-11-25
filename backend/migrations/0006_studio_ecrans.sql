@@ -6,7 +6,8 @@ INSERT INTO settings (key, value) VALUES
   ('investment_cents', ''),
   ('contribution_rate_bp', ''),
   ('cron_last_run', ''),
-  ('webhook_last_at', '');
+  ('webhook_last_at', ''),
+  ('notify_channels', '');
 --> statement-breakpoint
 -- Drop : quantités déclarées par le fondateur (reçues, offertes) et total théorique avant
 -- inventaire. Le stock vendable ne vient jamais d'ici : seulement de l'inventaire physique.
