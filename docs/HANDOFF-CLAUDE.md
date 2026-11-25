@@ -14,3 +14,7 @@ La PR nº 2 reste en brouillon sur `work/frontend-api-v1-2`. Elle contient l'int
 Pour isoler les adaptations Work : `git diff aab52709f40fd6a5bed3346ac4b7732fd4b2446e..work/frontend-api-v1-2 -- public/store scripts tests docs README.md CHANGELOG.md package.json public/_headers public/_routes.json`.
 
 [Contrat](API-CONTRACT.md) · [Responsabilités](OWNERSHIP.md) · [Design system](DESIGN-SYSTEM.md) · [État](STATUS.md)
+
+## Révision arrivée pendant la revue
+
+`397bb43c2a8109509ab0828aed3447fd4a703d4c` n'est pas intégré à la PR nº 2 de cette livraison, dont la référence auditée reste `aab5270`. Votre proposition commune SimpleWebAuthn a été lue : accord de principe sur un vérificateur maintenu ; Work a testé 14.1.0, tandis que la proposition mentionne 14.0.3. Confirmer ensemble la version exacte et sa migration avant le commit de dépendances. Les tests supplémentaires de l'assistant Windows et S09 ne sont pas comptés dans les résultats de cette livraison. Les fichiers concernés par B1/B2 n'ont pas changé dans cette nouvelle révision.

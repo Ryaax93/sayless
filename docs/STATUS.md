@@ -12,7 +12,7 @@ Préparation sur `work/frontend-api-v1-2`, PR nº 2 en brouillon. Backend Claude
 | STUDIO et authentification | Écrans Claude conservés, 84 tests backend/STUDIO rejoués, ancienne récupération corrigée ; contrôle visuel desktop/mobile. | SimpleWebAuthn à coordonner ; Face ID réel, Safari, Web Push, accessibilité sur appareil. |
 | Automatisations et sauvegardes | Code de Claude, tests locaux et quatre anciennes régressions réussis. | Services externes, budget CPU/quotas, restauration et surveillance hébergées, durée de conservation validée. |
 | Cloudflare TEST | Build frontend séparé et fermé, bundle Pages/Worker compilé, procédure complémentaire. | Ressources TEST, secrets, accès et autorisation de déployer. |
-| Aperçu privé | Actualisation visuelle préparée, boutique statique sans API active, aucun faux stock ni paiement. | Voir résultat de publication dans la PR ; distinct de la recette Cloudflare. |
+| Aperçu privé | Version 5 publiée sur l’aperçu privé existant, boutique statique sans API active, aucun faux stock ni paiement. | Connexion propriétaire requise ; distinct de la recette Cloudflare. |
 
 **172 tests passent, plus 13 assertions commerciales. Deux nouvelles régressions restent en échec et sont conservées : `npm run test:review:v13`.** Le tout n'est donc pas présenté comme une recette commerciale validée.
 

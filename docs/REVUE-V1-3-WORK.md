@@ -4,6 +4,8 @@
 
 Référence Claude examinée : `aab52709f40fd6a5bed3346ac4b7732fd4b2446e`, PR nº 1. Les quatre commits depuis `c6c9db1` ont été examinés, ainsi que le rapport privé fourni et l'intégralité de `API-CONTRACT.md`, `CLOUDFLARE-TEST.md`, `INTEGRATION-PLAN.md`, `OWNERSHIP.md` et `TEST-PLAN.md`.
 
+Une révision Claude supplémentaire, `397bb43c2a8109509ab0828aed3447fd4a703d4c`, a été observée pendant la vérification finale. Elle ajoute l'assistant Windows de test, la normalisation des codes d'installation/secours et une proposition SimpleWebAuthn 14.0.3. Son diff d'authentification et sa proposition ont été lus, mais **ce commit n'est pas intégré à cette livraison et ses nouveaux tests ne sont pas inclus dans les 172 ci-dessous**. Le contrat v1.3 n'y change pas. Les défauts B1/B2 portent sur des fichiers non corrigés par cette révision. Une intégration séparée évitera d'attribuer au nouveau SHA une recette exécutée sur `aab5270`.
+
 La préparation conserve la branche et la PR nº 2 existantes. Elle avance depuis `6832ccd` jusqu'à la branche de vérification intégrée publiée par Claude (`4d6a5cc`), puis ajoute les adaptations de la boutique. Cette avance ne fusionne aucune PR et ne déplace ni `v2` ni `main`.
 
 **Avis : préparation utilisable pour une recette technique hébergée séparée, avec paiements fermés au départ. Fusion vers `v2` à différer jusqu'aux corrections B1/B2 et à l'accord sur la publication des CGV. Aucun avis favorable à une ouverture commerciale.**
@@ -62,6 +64,8 @@ Accord proposé : Claude expose une route additive en lecture seule donnant vers
 Lecture du vérificateur manuel et des tests A01–A03. Les contrôles challenge/type/origine/RP ID, présence et vérification utilisateur, signature, compteur, userHandle et drapeaux de sauvegarde sont présents. La récupération révoque maintenant les anciennes autorisations.
 
 `@simplewebauthn/server@14.1.0` s'est installé dans un répertoire de travail isolé, sans modifier les dépendances du projet. Sous Node : inscription ES256, authentification signée et refus de mauvaise origine réussis avec authentificateur logiciel. Bundle ESM, génération d'options, inscription ES256 et refus de mauvaise origine également réussis dans **workerd local** avec `nodejs_compat`. Cela ne valide ni les quotas CPU hébergés, ni Safari/Face ID, ni toutes les clés RS256.
+
+La proposition commune `docs/WEBAUTHN-BIBLIOTHEQUE.md` du nouveau commit choisit 14.0.3. Work a vérifié 14.1.0 isolément : accord à obtenir sur la version exacte avant de modifier le verrou de dépendances. La responsabilité backend de Claude est conservée.
 
 Proposition à Claude, sans changement de ses fichiers : adopter un vérificateur maintenu après validation de la migration de stockage (COSE brut attendu par la bibliothèque, JWK actuellement conservée), de la liste d'algorithmes ES256/RS256, de la génération de sessions, des défis à usage unique et des compteurs. Garder `requireUserVerification`, origine et RP ID stricts. Prévoir migration contrôlée ou réinscription ; aucun repli silencieux vers un vérificateur plus permissif.
 
