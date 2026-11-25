@@ -60,8 +60,8 @@ export class SoftAuthenticator {
   }
 }
 
-export async function studio(stocks = { 'TEST-S': null, 'TEST-M': null, 'TEST-L': null }) {
-  const b = await bench(stocks);
+export async function studio(stocks = { 'TEST-S': null, 'TEST-M': null, 'TEST-L': null }, options = {}) {
+  const b = await bench(stocks, options);
   Object.assign(b.env, { STUDIO_ORIGIN: STUDIO, STUDIO_RP_ID: 'studio.test', ADMIN_SETUP_CODE: SETUP });
   // Bocal à cookies d'un navigateur : plusieurs cookies, effacés par Max-Age=0.
   const jar = new Map();

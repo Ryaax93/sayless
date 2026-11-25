@@ -11,7 +11,7 @@ import { recordInventory } from '../../backend/src/stock.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
 
 const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql',
-  '0005_revue_work.sql'];
+  '0005_revue_work.sql', '0006_studio_ecrans.sql'];
 // Texte de CGV de TEST uniquement (jamais publié) : sert à vérifier la version signée dans le devis.
 export const TEST_TERMS = { version: '2026-11', body: `CGV DE TEST — document fictif utilisé par les essais automatiques. ${'Clause de test. '.repeat(20)}` };
 export const TEST_LINK = { id: 'plink_test', price: 'price_test_lien' };
@@ -155,7 +155,9 @@ export class FakeStripe {
     s.customer_details = { name: customer.name, email: customer.email, phone: customer.phone };
     if (s.params?.['shipping_address_collection[allowed_countries][0]']) s.shipping_details = { name: customer.name, address: customer.address };
     if (s.params?.['custom_fields[0][key]'] === 'recipient_name') s.custom_fields = [{ key: 'recipient_name', type: 'text', text: { value: customer.name } }];
-    s.pi = { id: rid('pi'), status: method === 'card' ? 'succeeded' : 'processing', charge: { id: rid('ch'), created: this.clock.now() } };
+    // Frais simulés (1,5 % + 0,25 €) : chiffres de test, pas un tarif Stripe garanti.
+    s.pi = { id: rid('pi'), status: method === 'card' ? 'succeeded' : 'processing',
+      charge: { id: rid('ch'), created: this.clock.now(), balance_transaction: { fee: Math.round(s.amount_total * 0.015) + 25 } } };
     s.payment_status = method === 'card' ? 'paid' : 'unpaid';
   }
   asyncResult(sid, ok) {
@@ -190,6 +192,39 @@ export class FakeStripe {
     if (this.down) throw new StripeError('network');
     return structuredClone(this.charges.get(cid));
   }
+  async listLinkSessions(link, startingAfter = null) {
+    if (this.down) throw new StripeError('network');
+    const all = [...this.sessions.values()].filter((s) => s.payment_link === link && s.status === 'complete');
+    const from = startingAfter ? all.findIndex((s) => s.id === startingAfter) + 1 : 0;
+    const page = all.slice(from, from + 20);
+    return { data: page.map((s) => ({ id: s.id })), has_more: from + 20 < all.length };
+  }
+  // Remboursement simulé : même clé = même remboursement (idempotence Stripe).
+  async createRefund(paymentIntent, amount, key) {
+    if (this.down) throw new StripeError('network');
+    this.refunds ??= new Map();
+    if (this.refunds.has(key)) return this.refunds.get(key);
+    const session = [...this.sessions.values()].find((x) => x.pi?.id === paymentIntent);
+    if (!session) throw new StripeError('api', 404, 'invalid_request_error');
+    const chargeId = this.refund(session.id, amount);
+    const refund = { id: this.charges.get(chargeId).refunds.data.at(-1).id, status: 'succeeded', amount, charge: chargeId };
+    this.refunds.set(key, refund);
+    return refund;
+  }
+  async retrieveBalance() {
+    if (this.down) throw new StripeError('network');
+    return { available: [{ currency: 'eur', amount: 0 }], pending: [{ currency: 'eur', amount: 0 }] };
+  }
+}
+
+// Envoi d'e-mails simulé (aucun e-mail réel) : garde les requêtes faites à « Resend ».
+export function fakeMail() {
+  const sent = [];
+  const transport = async (url, init) => {
+    sent.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    return new Response('{"id":"email_test"}', { status: 200 });
+  };
+  return { sent, transport };
 }
 
 export class FakeCarrier {

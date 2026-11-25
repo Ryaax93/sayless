@@ -82,24 +82,31 @@ export async function piiReady(env) {
     return false;
   }
 }
-const aad = (orderId) => new TextEncoder().encode(`order:${orderId}`);
-export async function sealContact(env, contact, orderId) {
+// Chiffrement générique d'une valeur liée à son usage (données associées) : un chiffré déplacé
+// vers une autre commande, demande ou file d'envoi ne s'ouvre pas.
+export async function sealPayload(env, value, label) {
   let key;
   try {
     key = await piiKey(env);
   } catch {
     return null;
   }
-  if (!key || typeof orderId !== 'string' || !orderId) return null;
+  if (!key || typeof label !== 'string' || !label) return null;
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = new TextEncoder().encode(JSON.stringify(contact));
-  const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad(orderId) }, key, data);
+  const data = new TextEncoder().encode(JSON.stringify(value));
+  const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(label) }, key, data);
   return `v2.${b64url(iv)}.${b64url(sealed)}`;
 }
-export async function openContact(env, sealed, orderId) {
+export async function openPayload(env, sealed, label) {
   const key = await piiKey(env);
   const [version, iv, data] = String(sealed).split('.');
   if (!key || version !== 'v2') throw fail('not_configured');
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64url(iv), additionalData: aad(orderId) }, key, fromB64url(data));
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64url(iv), additionalData: new TextEncoder().encode(label) },
+    key, fromB64url(data));
   return JSON.parse(new TextDecoder().decode(plain));
 }
+export const sealContact = (env, contact, orderId) => (typeof orderId === 'string' && orderId ? sealPayload(env, contact, `order:${orderId}`) : null);
+export const openContact = (env, sealed, orderId) => openPayload(env, sealed, `order:${orderId}`);
+
+// Empreinte d'une adresse e-mail (recherche du suivi sans stocker l'adresse en clair).
+export const emailHash = (env, email) => hmacB64(env.APP_SECRET, `email:${String(email ?? '').trim().toLowerCase()}`);

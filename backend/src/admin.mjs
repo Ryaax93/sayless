@@ -294,6 +294,62 @@ export async function handleAdmin(request, env, deps) {
           audit(ctx.db, now, 'fondateur', 'sessions_revoked', null, 'ok')]);
         return json({ authenticated: false }, 200, { 'Set-Cookie': setCookie(COOKIE, '', 0) });
       }
+      // ---- appareils et codes de secours (réglages, confirmation Face ID) ----
+      case 'POST /api/admin/recovery-codes': {
+        await readJson(request);
+        requireStepUp();
+        const codes = Array.from({ length: 10 }, () => `${randomCode(4)}-${randomCode(4)}`);
+        const batchId = uuid();
+        await batch(ctx.db, [sql(ctx.db, 'DELETE FROM recovery_codes'),
+          ...(await Promise.all(codes.map(async (c) => sql(ctx.db, 'INSERT INTO recovery_codes (code_hash, batch, created_at) VALUES (?, ?, ?)',
+            await codeHash(env, c), batchId, now)))),
+          audit(ctx.db, now, 'fondateur', 'recovery_codes_regenerated', null, 'ok')]);
+        await deps.notify({ kind: 'studio_codes_regenerated', ref: String(now), level: 'warning', title: 'Nouveaux codes de secours',
+          body: 'Les anciens codes de secours ne fonctionnent plus.' });
+        return json({ recovery_codes: codes });
+      }
+      case 'POST /api/admin/devices/options': {
+        await readJson(request);
+        requireStepUp();
+        return json(await registrationOptions(ctx, config, now, session.hash));
+      }
+      case 'POST /api/admin/devices/verify': {
+        const body = await readJson(request, 32768);
+        requireStepUp();
+        const challenge = await consumeChallenge(ctx, body.challenge_id, 'register', now, session.hash);
+        const cred = await verifyRegistration({ response: body.credential, expectedChallenge: challenge, origin: config.origin, rpId: config.rpId });
+        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 40) : 'Nouvel appareil';
+        try {
+          await batch(ctx.db, [sql(ctx.db, `INSERT INTO passkeys (id, public_key, alg, sign_count, backed_up, transports, label, created_at, generation)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, cred.credentialId, cred.publicKey, cred.alg, cred.signCount, cred.backedUp ? 1 : 0, cred.transports,
+          label, now, generation), audit(ctx.db, now, 'fondateur', 'passkey_added', label, 'device')]);
+        } catch (error) {
+          if (error.dbCode === 'stale_generation') throw fail('challenge_expired');
+          if (error.dbCode === 'unique_failed') throw fail('passkey_rejected');
+          throw error;
+        }
+        await deps.notify({ kind: 'studio_passkey_added', ref: cred.credentialId.slice(0, 24), level: 'warning',
+          title: 'Nouvel appareil autorisé dans STUDIO', body: `« ${label} » peut maintenant se connecter. Si ce n’est pas toi, utilise un code de secours.` });
+        return json({ added: true, label });
+      }
+      case 'POST /api/admin/devices/revoke': {
+        const body = await readJson(request);
+        requireStepUp();
+        const id = String(body.id ?? '');
+        try {
+          await batch(ctx.db, [
+            // Jamais le dernier appareil : il resterait seulement les codes de secours.
+            sql(ctx.db, `INSERT INTO assertions (code) SELECT 'last_device' WHERE (SELECT COUNT(*) FROM passkeys WHERE revoked_at IS NULL AND id <> ?) = 0`, id),
+            sql(ctx.db, 'UPDATE passkeys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL', now, id),
+            sql(ctx.db, 'UPDATE auth_sessions SET revoked_at = ? WHERE passkey_id = ? AND revoked_at IS NULL', now, id),
+            audit(ctx.db, now, 'fondateur', 'passkey_revoked', id.slice(0, 24), 'ok'),
+          ]);
+        } catch (error) {
+          if (error.dbCode === 'assertion_failed') throw fail('last_device');
+          throw error;
+        }
+        return json({ revoked: true });
+      }
       default:
         // Routes métier : session obligatoire ; confirmation Face ID pour les actions sensibles.
         requireSession();

@@ -11,6 +11,9 @@ import { applyRetention } from './retention.mjs';
 import { maybeDailyBackup } from './backup.mjs';
 import { createStripeClient } from './stripe.mjs';
 import { handleAdmin } from './admin.mjs';
+import { lookupOrder, readOrder, submitRequest } from './requests.mjs';
+import { emailReady, resendSender } from './email.mjs';
+import { pushSender } from './push.mjs';
 
 // Contexte d'exécution : liaisons Cloudflare + dépendances injectables (horloge, Stripe, relais).
 export function createContext(env, overrides = {}) {
@@ -26,7 +29,18 @@ export function createContext(env, overrides = {}) {
   deps.rateLimit = overrides.rateLimit ?? ((key, limit, windowSeconds) => rateLimit(ctx.db, key, limit, windowSeconds, deps.now()));
   deps.turnstile = overrides.turnstile ?? ((token, ip) => verifyTurnstile(env, token, ip));
   deps.reconcile = (session) => reconcileSession(ctx, session, deps);
+  deps.senders = overrides.senders ?? sendersFor(env);
+  deps.sendNow = overrides.sendNow ?? ((dedupe) => deliverOutbox(ctx, deps.senders, deps, { only: dedupe }));
   return { ctx, deps };
+}
+
+// Canaux d'envoi réellement configurés (secrets saisis dans Cloudflare) ; aucun autre.
+export function sendersFor(env) {
+  const senders = {};
+  if (configuredChannels(env).includes('discord')) senders.discord = discordSender(env.DISCORD_WEBHOOK_URL);
+  if (configuredChannels(env).includes('push')) senders.push = pushSender(env);
+  if (emailReady(env)) senders.email = resendSender(env);
+  return senders;
 }
 
 // Catalogue éditorial (data/products.json) ; prix et publication relus dans D1, qui fait foi.
@@ -79,12 +93,23 @@ export async function handlePublicApi(request, env, options = {}) {
         await deps.rateLimit(`relay:${await clientHash(env, ip, deps.now())}`, 30, 600);
         return json(await searchRelays(ctx, deps, { postcode, country }));
       }
-      // Suivi, recherche de commande et demandes : refusés tant que l'envoi d'e-mails et le
-      // stockage des demandes ne sont pas raccordés et testés. Jamais de faux « envoyé ».
-      case 'POST /api/order/lookup':
-      case 'GET /api/order':
-      case 'POST /api/requests':
-        throw fail('not_configured');
+      // Suivi, recherche de commande et demandes : 503 not_configured tant que l'envoi d'e-mails
+      // (accusé sur support durable) et le chiffrement ne sont pas configurés. Jamais de faux « envoyé ».
+      case 'POST /api/order/lookup': {
+        const body = await readJson(request);
+        const client = await clientHash(env, ip, deps.now());
+        await deps.rateLimit(`lookup:${client}`, 10, 600);
+        return json(await lookupOrder(ctx, body, deps));
+      }
+      case 'GET /api/order': {
+        await deps.rateLimit(`order:${await clientHash(env, ip, deps.now())}`, 60, 600);
+        return json(await readOrder(ctx, request, deps));
+      }
+      case 'POST /api/requests': {
+        const body = await readJson(request);
+        await deps.rateLimit(`requests:${await clientHash(env, ip, deps.now())}`, 5, 600);
+        return json(await submitRequest(ctx, body, deps, { ip }));
+      }
       default:
         return json({ error: 'not_found' }, 404);
     }
@@ -143,8 +168,8 @@ export async function runScheduled(env, options = {}) {
   await step('daily_report', () => maybeDailyReport(ctx, deps));
   if (minute === 0) await step('relay_overdue', () => relayOverdue(ctx, deps));
   if (minute === 10) await step('retention', () => applyRetention(ctx, deps));
-  const senders = {};
-  if (deps.channels.includes('discord')) senders.discord = discordSender(env.DISCORD_WEBHOOK_URL);
-  await step('outbox', () => deliverOutbox(ctx, senders, deps));
+  await step('outbox', () => deliverOutbox(ctx, deps.senders, deps));
+  // Battement de la tâche planifiée (écran Santé) : une écriture par minute, dans l'offre gratuite.
+  await step('heartbeat', () => ctx.db.prepare(`UPDATE settings SET value = ? WHERE key = 'cron_last_run'`).bind(String(deps.now())).run());
   return report;
 }

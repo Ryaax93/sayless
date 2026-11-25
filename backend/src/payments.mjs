@@ -2,7 +2,8 @@
 // de l'état relu chez Stripe, balayage des réservations, ventes de l'ancien lien 1.0, remboursements
 // et import des ventes passées. Un remboursement ne remet jamais une pièce en stock.
 import { all, audit, batch, fail, getSettings, newReference, one, sql, uuid } from './lib.mjs';
-import { sealContact } from './security.mjs';
+import { emailHash, sealContact } from './security.mjs';
+import { orderConfirmationEmail, queueEmail } from './email.mjs';
 import { assertZone, orderItems, releaseStatements, validSession } from './commerce.mjs';
 import { sessionParams, verifyStripeSignature } from './stripe.mjs';
 import { afterSale } from './notify.mjs';
@@ -99,6 +100,11 @@ export async function reconcileSession(env, session, deps) {
 }
 
 const paymentIntentId = (s) => (typeof s.payment_intent === 'object' ? s.payment_intent?.id : s.payment_intent) ?? null;
+// Frais Stripe réels du paiement (transaction de solde de la charge), sinon inconnus (null).
+const stripeFee = (s) => {
+  const fee = s.payment_intent?.latest_charge?.balance_transaction?.fee;
+  return Number.isSafeInteger(fee) && fee >= 0 ? fee : null;
+};
 
 function contactFrom(session) {
   const details = session.customer_details ?? {};
@@ -152,8 +158,9 @@ async function confirmSale(env, order, session, deps) {
     order.id, now, paymentIntentId(session), session.id, contact.name, now, order.id),
     sql(db, `UPDATE orders SET number = (SELECT COALESCE(MAX(number), 0) + 1 FROM orders)
       WHERE id = ? AND number IS NULL AND paid_at IS NOT NULL`, order.id),
-    sql(db, `INSERT INTO order_contacts (order_id, sealed, created_at) SELECT ?, ?, ? WHERE ? IS NOT NULL
-      ON CONFLICT (order_id) DO NOTHING`, order.id, sealed, now, sealed),
+    sql(db, `INSERT INTO order_contacts (order_id, sealed, email_hash, created_at) SELECT ?, ?, ?, ? WHERE ? IS NOT NULL
+      ON CONFLICT (order_id) DO NOTHING`, order.id, sealed, contact.email ? await emailHash(env, contact.email) : null, now, sealed),
+    sql(db, 'UPDATE orders SET stripe_fee_cents = COALESCE(stripe_fee_cents, ?) WHERE id = ?', stripeFee(session), order.id),
     sql(db, `UPDATE orders SET review_reason = COALESCE(review_reason, ?), updated_at = ?
       WHERE id = ? AND paid_at = ? AND ? IS NOT NULL`, reviewReason, now, order.id, now, reviewReason),
     sql(db, `UPDATE orders SET status = 'review', updated_at = ? WHERE id = ? AND status = 'paid' AND ? IS NOT NULL
@@ -175,6 +182,12 @@ async function confirmSale(env, order, session, deps) {
     await afterSale(env, order.id, deps);
   } else if (after.status === 'review' && justPaid) {
     await afterSale(env, order.id, deps, { announce: false });
+  }
+  // Confirmation au client (une seule fois), dès que l'envoi d'e-mails est configuré.
+  if (justPaid && ['paid', 'review', 'paid_no_stock'].includes(after.status) && contact.email && env.PUBLIC_ORIGIN) {
+    const fresh = await one(db, 'SELECT * FROM orders WHERE id = ?', order.id);
+    await queueEmail(env, { dedupe: `order_confirmation:${order.id}`, to: contact.email,
+      ...orderConfirmationEmail({ order: fresh, items: await orderItems(db, order.id), origin: env.PUBLIC_ORIGIN }) }, now).catch(() => {});
   }
   return { status: after.status };
 }
@@ -273,8 +286,11 @@ export async function recordLegacyLinkSale(env, session, deps, { eventCreated = 
   qty, Math.max(line?.price?.unit_amount ?? map?.price_cents ?? session.amount_subtotal ?? 0, 0)));
   statements.push(sql(db, `UPDATE orders SET number = (SELECT COALESCE(MAX(number), 0) + 1 FROM orders)
     WHERE id = ? AND number IS NULL`, id));
-  const sealed = await sealContact(env, contactFrom(session), id);
-  if (sealed) statements.push(sql(db, 'INSERT INTO order_contacts (order_id, sealed, created_at) VALUES (?, ?, ?)', id, sealed, now));
+  const legacyContact = contactFrom(session);
+  const sealed = await sealContact(env, legacyContact, id);
+  if (sealed) statements.push(sql(db, 'INSERT INTO order_contacts (order_id, sealed, email_hash, created_at) VALUES (?, ?, ?, ?)', id, sealed,
+    legacyContact.email ? await emailHash(env, legacyContact.email) : null, now));
+  statements.push(sql(db, 'UPDATE orders SET stripe_fee_cents = ? WHERE id = ?', stripeFee(session), id));
   statements.push(audit(db, now, 'stripe', 'legacy_link_sale', reference, `${treatment}${reason ? `:${reason}` : ''}`));
   try {
     await batch(db, statements);
