@@ -3,7 +3,7 @@
 import { ApiError, errorResponse, fail, json, systemClock, getSettings } from './lib.mjs';
 import { assertSameOrigin, clientHash, rateLimit, readJson, verifyTurnstile } from './security.mjs';
 import { publicStock } from './stock.mjs';
-import { checkoutStatus, createQuote, startCheckout } from './commerce.mjs';
+import { checkoutStatus, createQuote, searchRelays, startCheckout } from './commerce.mjs';
 import { handleStripeWebhook, reconcileSession, sweep } from './payments.mjs';
 import { configuredChannels, createNotifier, deliverOutbox, discordSender, maybeDailyReport } from './notify.mjs';
 import { relayOverdue } from './operations.mjs';
@@ -70,12 +70,14 @@ export async function handlePublicApi(request, env, options = {}) {
         await deps.rateLimit(`status:${await clientHash(env, ip, deps.now())}`, 60, 600);
         return json(await checkoutStatus(ctx, body, deps));
       }
+      // Mêmes refus de destination que le devis (postcode_required, destination_not_supported).
       case 'GET /api/relay-points': {
         if (!deps.relays) throw fail('relay_unavailable');
-        const postcode = url.searchParams.get('postcode') ?? '';
-        if (!/^\d{5}$/.test(postcode) || (url.searchParams.get('country') ?? 'FR') !== 'FR') throw fail('invalid_request');
+        const postcode = (url.searchParams.get('postcode') ?? '').trim();
+        const country = (url.searchParams.get('country') ?? 'FR').trim().toUpperCase();
+        if (postcode.length > 10 || country.length !== 2) throw fail('invalid_request');
         await deps.rateLimit(`relay:${await clientHash(env, ip, deps.now())}`, 30, 600);
-        return json({ points: await deps.relays.search(postcode) });
+        return json(await searchRelays(ctx, deps, { postcode, country }));
       }
       // Suivi, recherche de commande et demandes : refusés tant que l'envoi d'e-mails et le
       // stockage des demandes ne sont pas raccordés et testés. Jamais de faux « envoyé ».
@@ -131,10 +133,15 @@ export async function runScheduled(env, options = {}) {
     }
   };
   const minute = Math.floor(deps.now() / 60) % 60;
+  // Minute 5 : sauvegarde seule, pour rester sous les limites de l'offre gratuite (50 requêtes et
+  // 10 ms de calcul par invocation). Le balayage reprend à la minute suivante.
+  if (minute === 5) {
+    await step('backup', () => maybeDailyBackup(ctx, deps));
+    return report;
+  }
   await step('sweep', () => sweep(ctx, deps));
   await step('daily_report', () => maybeDailyReport(ctx, deps));
   if (minute === 0) await step('relay_overdue', () => relayOverdue(ctx, deps));
-  if (minute === 5) await step('backup', () => maybeDailyBackup(ctx, deps));
   if (minute === 10) await step('retention', () => applyRetention(ctx, deps));
   const senders = {};
   if (deps.channels.includes('discord')) senders.discord = discordSender(env.DISCORD_WEBHOOK_URL);

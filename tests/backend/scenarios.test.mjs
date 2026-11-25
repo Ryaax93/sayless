@@ -158,7 +158,7 @@ test('t10 base indisponible ou boutique en pause : vente refusée, aucune sessio
   assert.equal(b.stripe.created, 0);
 });
 
-test('t11 Stripe indisponible à la création : pièce gardée jusqu’à confirmation, puis revendue', async () => {
+test('t11 Stripe indisponible à la création : pièce gardée, session retrouvée pour la reprise, revendue à l’expiration', async () => {
   const b = await bench({ 'TEST-M': 1 });
   b.stripe.down = true;
   const r1 = await b.checkout('TEST-M', '10.11.0.1');
@@ -167,6 +167,14 @@ test('t11 Stripe indisponible à la création : pièce gardée jusqu’à confir
   assert.equal((await run(b, sweep)).released, 0);
   assert.deepEqual(await b.inv('TEST-M'), [1, 1]);
   b.stripe.down = false;
+  // Stripe revenu pendant la réservation : la session est retrouvée par sa clé et gardée pour le client.
+  const back = await run(b, sweep);
+  assert.deepEqual([back.released, back.recovered], [0, 1]);
+  const resumed = await b.checkout('TEST-M', '10.11.0.1', { quote: r1.quote, key: r1.key });
+  assert.deepEqual([resumed.status, b.stripe.created], [200, 1]);
+  assert.equal((await b.checkout('TEST-M', '10.11.0.2')).body.error, 'held');
+  // Réservation échue sans paiement : session fermée chez Stripe, pièce rendue puis revendue.
+  b.clock.t += HOLD + 60;
   assert.equal((await run(b, sweep)).released, 1);
   assert.deepEqual(await b.inv('TEST-M'), [1, 0]);
   assert.equal((await b.checkout('TEST-M', '10.11.0.2')).status, 200);
@@ -372,7 +380,7 @@ test('t25 dernière pièce réservée : « réservée temporairement », jamais 
   assert.deepEqual([stock.variants[0].state, stock.drop_status], ['sold_out', 'sold_out']);
 });
 
-test('t26 réponse Stripe perdue : pièce gardée, session retrouvée par sa clé puis fermée, aucune 2e session', async () => {
+test('t26 réponse Stripe perdue : pièce gardée, session retrouvée par sa clé et gardée pour la reprise, fermée à l’échéance, aucune 2e session', async () => {
   const b = await bench({ 'TEST-M': 1 });
   b.stripe.loseResponse = true;
   const r = await b.checkout('TEST-M', '10.26.0.1');
@@ -381,9 +389,13 @@ test('t26 réponse Stripe perdue : pièce gardée, session retrouvée par sa cl�
   assert.equal((await run(b, sweep)).released, 0);
   assert.deepEqual(await b.inv('TEST-M'), [1, 1]);
   b.stripe.down = false;
-  assert.equal((await run(b, sweep)).released, 1);
+  assert.deepEqual([(await run(b, sweep)).recovered, await b.count('SELECT needs_stripe_check FROM orders')], [1, 0]);
   assert.deepEqual([r.status, r.body.error, b.stripe.created], [503, 'service_unavailable', 1]);
-  assert.equal([...b.stripe.sessions.values()][0].status, 'expired');
+  const resumed = await b.checkout('TEST-M', '10.26.0.1', { quote: r.quote, key: r.key });
+  assert.equal(resumed.sid, [...b.stripe.sessions.keys()][0], 'même session Stripe');
+  b.clock.t += HOLD + 60;
+  assert.equal((await run(b, sweep)).released, 1);
+  assert.deepEqual([b.stripe.created, [...b.stripe.sessions.values()][0].status], [1, 'expired']);
   assert.deepEqual(await b.inv('TEST-M'), [1, 0]);
 });
 

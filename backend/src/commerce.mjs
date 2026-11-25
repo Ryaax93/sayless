@@ -6,6 +6,7 @@ import {
 } from './lib.mjs';
 import { explainShortage } from './stock.mjs';
 import { sessionParams } from './stripe.mjs';
+import { piiReady } from './security.mjs';
 
 const SKU = /^[A-Z0-9-]{3,40}$/;
 
@@ -39,10 +40,15 @@ async function priceLines(db, items) {
   return lines;
 }
 
+// Inventaire vérifié pour TOUTES les tailles du produit (même règle que le stock public et que la
+// base au moment de la réservation), puis quantité libre pour chaque ligne demandée.
 async function stockCheck(db, items) {
   for (const item of items) {
-    const row = await one(db, 'SELECT on_hand, reserved, confirmed_at FROM inventory WHERE sku = ?', item.sku);
-    if (!row || row.confirmed_at === null) throw fail('stock_unavailable');
+    const unverified = await one(db, `SELECT COUNT(*) AS n FROM variants v LEFT JOIN inventory i ON i.sku = v.sku
+      WHERE v.product_id = (SELECT product_id FROM variants WHERE sku = ?) AND (i.sku IS NULL OR i.confirmed_at IS NULL)`, item.sku);
+    if (unverified.n > 0) throw fail('stock_unavailable');
+    const row = await one(db, 'SELECT on_hand, reserved FROM inventory WHERE sku = ?', item.sku);
+    if (!row) throw fail('stock_unavailable');
     if (row.on_hand - row.reserved < item.quantity) throw fail(await explainShortage(db, [item]));
   }
 }
@@ -64,23 +70,59 @@ async function resolveShipping(db, deps, settings, { shipping, relayId, country 
     assertZone(settings, country, postcode);
     return { method: 'home', cents: rate.cents, relay: null, zone: { country, postcode } };
   }
-  if (typeof relayId !== 'string' || !relayId.trim()) throw fail('relay_required');
+  if (typeof relayId !== 'string' || !relayId.trim() || relayId.length > 80) throw fail('relay_required');
   if (!deps.relays) throw fail('relay_unavailable');
-  const relay = await deps.relays.find(relayId);
+  const relay = normalizeRelay(await deps.relays.find(relayId));
   if (!relay || relay.open === false) throw fail('invalid_relay');
-  assertZone(settings, relay.country, relay.postcode);
-  return { method: 'relay', cents: rate.cents, relay: { id: relay.id, label: relay.name, network: relay.network ?? null,
-    postcode: relay.postcode, city: relay.city ?? null }, zone: { country: relay.country, postcode: relay.postcode } };
+  assertZone(settings, relay.address.country, relay.address.postcode);
+  return { method: 'relay', cents: rate.cents, relay: { id: relay.id, label: relay.name, network: relay.network,
+    postcode: relay.address.postcode, city: relay.address.city, address: relay.address },
+  zone: { country: relay.address.country, postcode: relay.address.postcode } };
+}
+
+// Point relais du fournisseur, sous une forme stable : identifiant, nom, réseau, adresse complète.
+// Aucune donnée personnelle. Le même objet est montré au client, signé dans le devis et figé dans
+// la commande (relay_snapshot) pour l'étiquette et STUDIO.
+export function normalizeRelay(raw) {
+  if (!raw || typeof raw.id !== 'string' || !raw.id) return null;
+  const text = (v, max = 120) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+  const a = raw.address ?? {};
+  const address = { line1: text(a.line1 ?? raw.line1), line2: text(a.line2 ?? raw.line2), postcode: text(a.postcode ?? raw.postcode, 10),
+    city: text(a.city ?? raw.city, 80), country: text(a.country ?? raw.country, 2) ?? 'FR' };
+  return { id: raw.id.slice(0, 80), name: text(raw.name) ?? 'Point relais', network: text(raw.network, 40), address,
+    open: raw.open !== false };
+}
+
+// Recherche de points relais : mêmes refus de destination que le devis, points hors zone écartés.
+export async function searchRelays(env, deps, { postcode, country = 'FR' }) {
+  if (!deps.relays) throw fail('relay_unavailable');
+  const settings = await getSettings(env.db).catch(() => { throw fail('service_unavailable'); });
+  assertZone(settings, country, postcode);
+  const points = [];
+  for (const raw of (await deps.relays.search(postcode)) ?? []) {
+    const relay = normalizeRelay(raw);
+    if (!relay || !relay.open) continue;
+    try {
+      assertZone(settings, relay.address.country, relay.address.postcode);
+    } catch {
+      continue;
+    }
+    points.push({ id: relay.id, name: relay.name, network: relay.network, postcode: relay.address.postcode,
+      city: relay.address.city, address: relay.address });
+  }
+  return { points };
 }
 
 // ---------- devis ----------
 // Le devis est un jeton signé (HMAC APP_SECRET) : aucune écriture en base, aucune coordonnée.
+// Il porte la version des CGV en vigueur : le paiement exige cette même version.
 export async function createQuote(env, body, deps) {
   const { db } = env;
   const now = deps.now();
   if (!env.APP_SECRET) throw fail('not_configured');
   const settings = await getSettings(db).catch(() => { throw fail('service_unavailable'); });
   if (settings.shop_mode !== 'open') throw fail('paused');
+  if (!settings.terms_version) throw fail('not_configured');
   const items = normalizeItems(body.items, Number(settings.max_items_per_order || 1));
   const lines = await priceLines(db, items);
   await stockCheck(db, items);
@@ -91,6 +133,7 @@ export async function createQuote(env, body, deps) {
   const payload = {
     v: 1, exp: expires, items: lines.map((l) => [l.sku, l.quantity, l.unit_price_cents]),
     shipping: ship.method, relay: ship.relay, zone: ship.zone, ship: ship.cents, total: subtotal + ship.cents,
+    t: settings.terms_version,
   };
   const encoded = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   const id = `q1.${encoded}.${await hmacB64(env.APP_SECRET, `quote:${encoded}`)}`;
@@ -104,17 +147,26 @@ export async function createQuote(env, body, deps) {
     total_cents: subtotal + ship.cents,
     shipping: ship.method,
     relay: ship.relay,
+    terms_version: settings.terms_version,
     expires_at: iso(expires),
   };
 }
 
-export async function readQuote(env, id, now) {
+// Signature toujours vérifiée. L'expiration n'est ignorée que pour retrouver une tentative déjà
+// enregistrée avec la même clé (allowExpired) : un devis expiré n'ouvre jamais un nouvel achat.
+export async function readQuote(env, id, now, { allowExpired = false } = {}) {
   if (typeof id !== 'string' || id.length > 4096) throw fail('quote_invalid');
   const [version, encoded, signature] = id.split('.');
   if (version !== 'q1' || !encoded || !signature) throw fail('quote_invalid');
   if (!timingSafeEqual(signature, await hmacB64(env.APP_SECRET, `quote:${encoded}`))) throw fail('quote_invalid');
-  const payload = JSON.parse(new TextDecoder().decode(fromB64url(encoded)));
-  if (payload.v !== 1 || !(payload.exp > now)) throw fail('quote_expired');
+  let payload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(fromB64url(encoded)));
+  } catch {
+    throw fail('quote_invalid');
+  }
+  if (payload?.v !== 1) throw fail('quote_invalid');
+  if (!allowExpired && !(payload.exp > now)) throw fail('quote_expired');
   return payload;
 }
 
@@ -134,28 +186,38 @@ export function releaseStatements(db, orderId, now, to = 'expired') {
   ];
 }
 
+// État public d'une commande (page /merci, tentative close).
+export const PUBLIC_STATUS = { pending: 'pending', awaiting_payment: 'processing', paid: 'paid', paid_no_stock: 'review',
+  review: 'review', expired: 'expired', failed: 'failed', refunded: 'refunded', partially_refunded: 'paid' };
+
 export async function startCheckout(env, input, deps) {
   const { db } = env;
   const now = deps.now();
   const { body, idempotencyKey, clientHash, ip } = input;
   if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(idempotencyKey)) throw fail('invalid_request');
   if (!env.APP_SECRET || !env.PUBLIC_ORIGIN) throw fail('not_configured');
-  const quote = await readQuote(env, body.quote_id, now);
+  const quote = await readQuote(env, body.quote_id, now, { allowExpired: true });
   const settings = await getSettings(db).catch(() => { throw fail('service_unavailable'); });
   const items = normalizeItems(body.items, Number(settings.max_items_per_order || 1));
   const relayId = body.shipping === 'relay' ? body.relay_id : null;
-  const sameItems = JSON.stringify(items.map((i) => [i.sku, i.quantity])) === JSON.stringify(quote.items.map(([s, q]) => [s, q]));
-  if (!sameItems || body.shipping !== quote.shipping || (relayId ?? null) !== (quote.relay?.id ?? null)) throw fail('quote_mismatch');
   if (typeof body.terms_version !== 'string' || !body.terms_version || body.terms_version.length > 40) throw fail('invalid_request');
-  if (settings.terms_version && body.terms_version !== settings.terms_version) throw fail('terms_outdated');
   const fingerprint = await sha256Hex(JSON.stringify({ items, shipping: body.shipping, relayId, quote: body.quote_id, terms: body.terms_version }));
 
-  // Reprise d'une tentative : même clé et même contenu, sans nouveau contrôle anti-abus.
+  // 1. Reprise : la tentative est retrouvée par sa clé avant tout contrôle du devis ou des CGV.
+  //    Même contenu : même session Stripe et même réservation, sans nouveau contrôle anti-abus.
   const existing = await one(db, 'SELECT * FROM orders WHERE idempotency_key = ?', idempotencyKey);
   if (existing) return resumeCheckout(env, existing, fingerprint, deps);
 
+  // 2. Nouvelle tentative : devis valide et identique, CGV en vigueur, chiffrement prêt, ventes ouvertes.
+  if (!(quote.exp > now)) throw fail('quote_expired');
+  const sameItems = JSON.stringify(items.map((i) => [i.sku, i.quantity])) === JSON.stringify(quote.items.map(([s, q]) => [s, q]));
+  if (!sameItems || body.shipping !== quote.shipping || (relayId ?? null) !== (quote.relay?.id ?? null)) throw fail('quote_mismatch');
+  if (!settings.terms_version) throw fail('not_configured');
+  if (body.terms_version !== settings.terms_version || quote.t !== settings.terms_version) throw fail('terms_outdated');
   if (settings.shop_mode !== 'open') throw fail('paused');
   if (settings.payments_enabled !== '1' || !deps.stripe) throw fail('payments_disabled');
+  // Coordonnées de livraison chiffrées obligatoires : sans clé valide, aucun paiement n'est ouvert.
+  if (!(await piiReady(env))) throw fail('not_configured');
   await deps.rateLimit(`checkout:${clientHash}`, 5, 600);
   await deps.turnstile(body.turnstile, ip);
 
@@ -171,15 +233,16 @@ export async function startCheckout(env, input, deps) {
     id: uuid(), reference: newReference(), shipping_method: ship.method, relay_id: ship.relay?.id ?? null,
     relay_label: ship.relay?.label ?? null, subtotal_cents: lines.reduce((n, l) => n + l.unit_price_cents * l.quantity, 0),
     shipping_cents: ship.cents, stripe_expires_at: now + Number(settings.stripe_session_seconds || 1830),
+    relay_snapshot: ship.relay ? JSON.stringify({ id: ship.relay.id, name: ship.relay.label, network: ship.relay.network, address: ship.relay.address }) : null,
   };
   order.total_cents = order.subtotal_cents + order.shipping_cents;
   const statements = [
     sql(db, `INSERT INTO orders (id, reference, source, status, idempotency_key, request_fingerprint, shipping_method,
-        relay_id, relay_label, subtotal_cents, shipping_cents, total_cents, terms_version, stripe_expires_at,
+        relay_id, relay_label, relay_snapshot, subtotal_cents, shipping_cents, total_cents, terms_version, stripe_expires_at,
         created_at, expires_at, updated_at)
-      VALUES (?, ?, 'storefront', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, 'storefront', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     order.id, order.reference, idempotencyKey, fingerprint, order.shipping_method, order.relay_id, order.relay_label,
-    order.subtotal_cents, order.shipping_cents, order.total_cents, body.terms_version, order.stripe_expires_at,
+    order.relay_snapshot, order.subtotal_cents, order.shipping_cents, order.total_cents, body.terms_version, order.stripe_expires_at,
     now, now + holdSeconds, now),
   ];
   lines.forEach((l, i) => {
@@ -203,6 +266,7 @@ export async function startCheckout(env, input, deps) {
     if (code === 'insufficient_stock') throw fail(await explainShortage(db, items));
     if (code === 'paused') throw fail('paused');
     if (code === 'stock_unverified') throw fail('stock_unavailable');
+    if (code === 'terms_unpublished') throw fail('not_configured');
     if (code === 'not_published') throw fail('invalid_items');
     if (code === 'hold_limit') throw fail('hold_limit');
     throw fail('service_unavailable');
@@ -210,22 +274,27 @@ export async function startCheckout(env, input, deps) {
   return openSession(env, await orderRow(db, order.id), deps);
 }
 
+// Tentative close : sa référence, son état public et, si elle en a une, sa session Stripe (le
+// client qui détient la clé et le contenu exact peut ainsi afficher la page de suivi /merci).
+function closedAttempt(order) {
+  return fail('attempt_closed', { order_reference: order.reference, payment_status: PUBLIC_STATUS[order.status] ?? 'expired',
+    ...(order.stripe_session_id ? { session_id: order.stripe_session_id } : {}) });
+}
+
 async function resumeCheckout(env, order, fingerprint, deps) {
   if (order.request_fingerprint !== fingerprint) throw fail('idempotency_conflict');
   const now = deps.now();
-  if (order.status !== 'pending' || now >= order.stripe_expires_at) {
-    throw fail('attempt_closed', { order_reference: order.reference });
-  }
+  if (order.status !== 'pending' || now >= order.stripe_expires_at) throw closedAttempt(order);
   if (order.stripe_session_id && order.stripe_session_url) {
     return { url: order.stripe_session_url, order_reference: order.reference, expires_at: iso(order.stripe_expires_at) };
   }
-  return openSession(env, order, deps);
+  return openSession(env, order, deps, { resume: true });
 }
 
-// Création (ou reprise) de la session Stripe. Toute réponse incertaine garde la réservation :
-// seul le balayage, après confirmation par Stripe, pourra la libérer. Les URL de retour viennent
-// toujours de PUBLIC_ORIGIN : une reprise envoie exactement les mêmes paramètres à Stripe.
-async function openSession(env, order, deps) {
+// Création (ou reprise) de la session Stripe. Clé d'idempotence et paramètres identiques à chaque
+// essai : Stripe renvoie la session déjà créée au lieu d'en ouvrir une seconde. Toute réponse
+// incertaine garde la réservation ; seul un refus explicite de Stripe la rend.
+async function openSession(env, order, deps, { resume = false } = {}) {
   const { db } = env;
   const now = deps.now();
   const items = await orderItems(db, order.id);
@@ -234,9 +303,12 @@ async function openSession(env, order, deps) {
     session = await deps.stripe.createCheckoutSession(sessionParams(order, items, env.PUBLIC_ORIGIN), `sayless-checkout-${order.id}`);
   } catch (error) {
     if (error.definite) {
-      // Stripe a explicitement refusé : aucune session n'existe pour cette clé, la pièce peut revenir.
+      // Refus explicite : aucune session n'existe pour cette clé, la pièce peut revenir.
       await batch(db, [...releaseStatements(db, order.id, now, 'expired'),
-        audit(db, now, 'system', 'checkout_session_refused', order.reference, `stripe_${error.status}`)]);
+        audit(db, now, 'system', resume ? 'checkout_resume_refused' : 'checkout_session_refused', order.reference, `stripe_${error.status}`)]);
+      // Reprise après plus de 30 s d'une tentative jamais reçue par Stripe : la date d'expiration
+      // d'origine n'est plus acceptée. Situation attendue, sans alerte : la tentative est close.
+      if (resume && now - order.created_at > 30) throw closedAttempt(await orderRow(db, order.id));
       await deps.notify({ kind: 'technical', ref: `stripe_refused:${order.id}`, level: 'critical',
         title: 'Stripe a refusé une session de paiement', body: `Commande ${order.reference} : code ${error.status}. Pièce remise en vente.` });
       throw fail('service_unavailable');
@@ -244,9 +316,7 @@ async function openSession(env, order, deps) {
     await batch(db, [sql(db, 'UPDATE orders SET needs_stripe_check = 1, updated_at = ? WHERE id = ?', now, order.id)]).catch(() => {});
     throw fail('service_unavailable', { retryAfter: 3 });
   }
-  const valid = typeof session?.url === 'string' && /^https:\/\/checkout\.stripe\.com\//.test(session.url)
-    && session.client_reference_id === order.id && session.amount_total === order.total_cents;
-  if (!valid) {
+  if (!validSession(session, order)) {
     await batch(db, [sql(db, 'UPDATE orders SET needs_stripe_check = 1, updated_at = ? WHERE id = ?', now, order.id)]).catch(() => {});
     await deps.notify({ kind: 'technical', ref: `session_mismatch:${order.id}`, level: 'critical',
       title: 'Session Stripe incohérente', body: `Commande ${order.reference} : montant ou référence inattendus.` });
@@ -257,6 +327,9 @@ async function openSession(env, order, deps) {
   session.id, session.url, now, order.id, session.id)]);
   return { url: session.url, order_reference: order.reference, expires_at: iso(order.stripe_expires_at) };
 }
+
+export const validSession = (session, order) => typeof session?.url === 'string' && /^https:\/\/checkout\.stripe\.com\//.test(session.url)
+  && session.client_reference_id === order.id && session.amount_total === order.total_cents;
 
 // Page /merci : référence + session Stripe exigées ensemble ; aucune donnée personnelle renvoyée.
 export async function checkoutStatus(env, body, deps) {
@@ -276,7 +349,5 @@ export async function checkoutStatus(env, body, deps) {
       // Stripe muet : on répond avec l'état connu, le webhook ou le balayage trancheront.
     }
   }
-  const map = { pending: 'pending', awaiting_payment: 'processing', paid: 'paid', paid_no_stock: 'review', review: 'review',
-    expired: 'expired', failed: 'failed', refunded: 'refunded', partially_refunded: 'paid' };
-  return { order_reference: order.reference, payment_status: map[order.status] ?? 'pending', updated_at: iso(order.updated_at) };
+  return { order_reference: order.reference, payment_status: PUBLIC_STATUS[order.status] ?? 'pending', updated_at: iso(order.updated_at) };
 }

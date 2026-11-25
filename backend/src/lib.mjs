@@ -10,7 +10,8 @@ export const ERROR_STATUS = Object.freeze({
   not_found: 404, unknown_product: 404,
   sold_out: 409, held: 409, quote_expired: 409, quote_invalid: 409, price_changed: 409, quote_mismatch: 409,
   idempotency_conflict: 409, checkout_in_progress: 409, attempt_closed: 409, terms_outdated: 409,
-  stale_revision: 409, quantity_below_reservations: 409,
+  stale_revision: 409, quantity_below_reservations: 409, terms_version_exists: 409, not_ready: 409,
+  order_not_reviewable: 409, refund_not_allowed: 409,
   payload_too_large: 413, unsupported_media_type: 415,
   invalid_items: 422, quantity_not_supported: 422, relay_required: 422, invalid_relay: 422,
   destination_not_supported: 422, postcode_required: 422,
@@ -35,8 +36,11 @@ const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
 };
+// En-têtes : objet ou liste de paires (plusieurs Set-Cookie dans une même réponse).
 export function json(body, status = 200, headers = {}) {
-  return new Response(JSON.stringify(body), { status, headers: { ...SECURITY_HEADERS, ...headers } });
+  const out = new Headers(SECURITY_HEADERS);
+  for (const [k, v] of Array.isArray(headers) ? headers : Object.entries(headers)) out.append(k, v);
+  return new Response(JSON.stringify(body), { status, headers: out });
 }
 export function errorResponse(error) {
   if (error instanceof ApiError) {
@@ -96,7 +100,8 @@ export function timingSafeEqual(a, b) {
 const DB_CODES = ['not_held', 'paused', 'not_published', 'stock_unverified', 'insufficient_stock', 'hold_limit',
   'unknown_sku', 'ledger_append_only', 'audit_append_only', 'reservation_transition_forbidden',
   'order_transition_forbidden', 'return_not_allowed', 'return_quantity_exceeded', 'return_check_final',
-  'inventory_via_ledger_only', 'stale_revision', 'assertion_failed'];
+  'inventory_via_ledger_only', 'stale_revision', 'assertion_failed', 'stale_generation', 'session_refused',
+  'terms_final', 'terms_unpublished'];
 export function dbCode(error) {
   const message = String(error?.message ?? error);
   for (const code of DB_CODES) if (new RegExp(`\\b${code}\\b`).test(message)) return code;

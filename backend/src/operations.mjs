@@ -149,7 +149,7 @@ export async function viewContact(env, orderId, actor, deps, { archived = false 
     return { archived: true };
   }
   await batch(db, [audit(db, now, actor, row?.archived_at ? 'view_archived_contact' : 'view_customer_contact', orderId, row ? 'ok' : 'none')]);
-  return row ? openContact(env, row.sealed) : null;
+  return row ? openContact(env, row.sealed, orderId) : null;
 }
 
 // Purge des coordonnées des commandes payées avant une date. Le nom et le montant restent
