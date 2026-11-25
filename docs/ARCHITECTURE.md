@@ -1,5 +1,11 @@
 # Architecture et migration
 
+## Préparation sur contrat v1.2
+
+Le site statique appelle les routes de même origine gérées par `functions/api/[[path]].js`. Le catalogue public relit prix et publication en D1. La boutique utilise les SKU du produit, conserve seulement un stock vérifié récent et attend un devis signé avant de présenter le total. CGV et Turnstile précèdent la réservation et la création de session. Sur le retour Stripe, `POST /api/checkout/status` détermine l’état affiché. Le Worker `ops/` reçoit les webhooks et rapproche les paiements avec le même code métier et la même base que l’API publique.
+
+Les choix de migration ci-dessous décrivent la situation initiale du 24 novembre. Les décisions actuelles figurent dans le [contrat v1.2](API-CONTRACT.md) et la [revue d’intégration](REVUE-PR-1-WORK.md).
+
 ## Cible validée par le fondateur
 
 GitHub conserve le code ; Cloudflare Pages sert la boutique ; Workers gère les API ; D1 conserve l’état métier. Stripe Checkout reçoit les paiements. Claude développe SAYLESS STUDIO, les commandes, les expéditions Boxtal (ou équivalent), les notifications Discord et les e-mails Resend. Work intègre ces API dans la boutique et partage sa direction artistique.

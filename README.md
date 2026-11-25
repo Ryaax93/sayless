@@ -1,75 +1,63 @@
-# SAYLESS 2.0 — Boutique et relais technique
+# SAYLESS 2.0
 
-Branche de développement `v2` de `Ryaax93/sayless`. Aucune publication, aucun paiement réel, aucun changement de `main` ou de domaine. Cette copie conserve le design et les ressources de l’aperçu v4 puis prépare son intégration au backend de Claude.
+Cette branche prépare le raccordement de la boutique SAYLESS au serveur et à STUDIO livrés par Claude. Elle reprend la direction artistique et les ressources de l’aperçu v4. Les paiements sont fermés.
 
-## Démarrage indépendant
+**Avant toute fusion**, lire la [revue de la PR nº 1](docs/REVUE-PR-1-WORK.md) et les [corrections attendues de Claude](docs/HANDOFF-CLAUDE.md). La branche de préparation contient déjà les trois commits examinés. Les deux PR ciblent `v2` et restent soumises à l’autorisation du fondateur.
 
-Prérequis : Git et Node.js **22.13 ou ultérieur** avec npm. Aucun compte Cloudflare, Stripe ou plateforme d’aperçu n’est nécessaire pour consulter la boutique.
+## Consulter la boutique
+
+Avec Git, Node 22.13 ou ultérieur et npm :
 
 ```sh
-git clone --branch v2 --single-branch https://github.com/Ryaax93/sayless.git
+git clone --branch work/frontend-api-v1-2 --single-branch https://github.com/Ryaax93/sayless.git
 cd sayless
 npm run dev:storefront
 ```
 
-Ouvrir `http://127.0.0.1:5173/`. Ce mode utilise uniquement Node, sans installation de dépendances. Les fichiers publics sont servis localement. **Toutes les API répondent 503 `backend_not_connected`** : aucune quantité inventée, aucune réservation, aucun paiement, aucun envoi. Le stock affiche « Stock à confirmer » et bloque l’ajout tant que le serveur ne répond pas avec un inventaire vérifié. Le panier de démonstration et ses écrans restent dans le code, et l’aperçu privé existant reste disponible dans sa version publiée.
+Ouvrir `http://127.0.0.1:5173/`. La consultation statique fonctionne sans installer de paquet. Elle sert le site et les routes de retour `/merci`, `/commande-annulee` et `/suivi`. Dans ce mode, les API répondent `503 backend_not_connected` et la boutique indique « Stock à confirmer ». Les photos, les polices, le logo et le lookbook sont inclus dans le dépôt.
 
-### Installer et tester
+## Installer et tester le raccordement
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
-npm run test:frontend
-npm run test:inventory
+npm test
 npm run build:storefront
+npm run check:cloudflare
+npm run test:review
 ```
 
-`test:frontend` peut être lancé sans `npm ci` : tests Node natifs, calculs commerciaux, frontière API, affichage du stock et démarrage dans un processus isolé. `test:inventory` utilise Miniflare et nécessite les dépendances : il teste le **prototype historique**, pas le futur backend de Claude. `npm test` lance les deux suites. Tous les essais utilisent des données de test en mémoire ou une base locale éphémère, sans service payant ni trafic Stripe.
+| Commande | Portée |
+| --- | --- |
+| `npm test` | Client de la boutique, parcours et rendu, retours Stripe, ancien inventaire, backend/STUDIO et tests croisés frontend/routeur/D1 locale. |
+| `npm run test:integration` | Le véritable client HTTP et le contrôleur de la boutique appellent le véritable routeur de Claude sur D1 locale. Stripe et le transporteur sont simulés. |
+| `npm run test:review` | Trois critères commerciaux non satisfaits par le commit Claude examiné. Cette suite séparée doit devenir verte après ses corrections. |
+| `npm run build:storefront` | Produit `dist-storefront/` avec les ressources et le catalogue. |
+| `npm run check:cloudflare` | Construit STUDIO, compile les Pages Functions et vérifie le Worker par Wrangler en `--dry-run`. |
 
-`build:storefront` produit `dist-storefront/` avec le HTML, le catalogue et les ressources. Il ne déploie rien. Ce répertoire pourra alimenter Cloudflare Pages après raccordement et accord du fondateur ; il ne doit pas être publié à ce stade.
+Aucun accès de production n’est nécessaire. Les tests créent des bases éphémères avec des données de recette. Les commandes ci-dessus n’effectuent aucun déploiement.
 
-## Organisation
+## Organisation du code
 
 | Chemin | Rôle |
 | --- | --- |
-| `public/store/` | Boutique existante : HTML, styles, pages, galerie, panier, parcours démo, textes légaux |
-| `public/store/assets/` | Logo, 3 images WebP, favicon, 3 polices et leurs licences |
-| `public/store/api-client.js` | Client des futures API, sans backend et paiement bloqué par défaut |
-| `public/store/inventory.js` | Affichage du stock vérifié ; panne, réservation, rupture distinctes |
-| `data/products.json` | Catalogue éditorial initial, sans stock ; extensible aux futurs produits/drops/couleurs |
-| `server/`, `db/`, `drizzle/`, `app/api/`, `worker/` | Prototype historique transmis à Claude, à auditer et migrer, non actif dans le lancement portable |
-| `public/store/admin.js` | Ancien écran expérimental, conservé pour audit ; ce n’est pas SAYLESS STUDIO |
-| `scripts/dev-storefront.mjs`, `scripts/build-storefront.mjs` | Consultation et construction locales portables |
-| `tests/` | Tests frontend et du prototype historique |
-| `docs/` | Architecture, contrat API, responsabilités, design, état réel et contrôles |
+| `public/store/` | Boutique et design validé, guide, pages d’aide et pages légales. |
+| `public/store/api-client.js`, `catalog.js`, `inventory*.js` | Contrat v1.2, catalogue et SKU publiés, stock confirmé, règles d’affichage. |
+| `public/store/checkout-flow.js`, `checkout.js`, `config.js` | Devis, consentement, anti-abus, tentative idempotente, retour Stripe et réglages publics. |
+| `data/products.json`, `public/store/assets/` | Fiche éditoriale, logo, photographies et typographies. |
+| `functions/api/`, `backend/`, `ops/` | API de même origine, logique métier commune, migrations et opérations de Claude. |
+| `studio/` | Interface administrateur et application web de Claude. |
+| `tests/frontend-integration.test.mjs`, `tests/review/` | Raccordement sur D1 locale et critères de correction. |
+| `server/`, `drizzle/`, `db/`, `app/api/`, `worker/`, `public/store/admin.js` | Prototype d’origine conservé pour référence. L’ancien écran de gestion est exclu de la boutique servie. |
 
-L’inventaire exhaustif des fichiers figure dans [docs/FILES.md](docs/FILES.md). Les empreintes de la source v4 sont dans [docs/source-snapshot.json](docs/source-snapshot.json).
+Le gilet unisexe rose pastel est proposé en S, M et L à 75 € TTC hors livraison. Pour une pièce, les tarifs prévus de 4,90 € en relais et 8,50 € à domicile donnent 79,90 € et 83,50 €. Le total présenté avant paiement provient de `POST /api/quote`. Le lancement est prévu en France métropolitaine hors Corse. Le comptage physique reste à effectuer. Les 26 pièces théoriques ne servent jamais à initialiser le stock.
 
-## Documents à lire avec Claude
+Le client choisit son mode de livraison et son éventuel relais sur SAYLESS. Stripe doit recueillir ses coordonnées. La carte, Apple Pay et Google Pay sont prévus selon compatibilité. Le choix du relais d’un vrai transporteur, les paiements Stripe, le suivi et les e-mails attendent leur recette externe.
 
-1. [docs/HANDOFF-CLAUDE.md](docs/HANDOFF-CLAUDE.md) — point d’entrée et prochaines étapes.
-2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — cible et incompatibilités du prototype.
-3. [docs/API-CONTRACT.md](docs/API-CONTRACT.md) — contrat proposé, à valider ensemble avant branchement.
-4. [docs/OWNERSHIP.md](docs/OWNERSHIP.md) et [AGENTS.md](AGENTS.md) — limites des dossiers et coordination.
-5. [docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md) — identité à partager avec SAYLESS STUDIO.
-6. [docs/STATUS.md](docs/STATUS.md), [docs/TEST-PLAN.md](docs/TEST-PLAN.md), [CHANGELOG.md](CHANGELOG.md).
-7. [INFORMATIONS-A-COMPLETER.md](INFORMATIONS-A-COMPLETER.md) — inventaire physique, mesures, administratif, transport.
+## Documentation
 
-## Prototype historique, uniquement pour audit
+- [État de la boutique](docs/STATUS.md), [plan et résultats de tests](docs/TEST-PLAN.md), [changelog](CHANGELOG.md).
+- [Architecture](docs/ARCHITECTURE.md), [contrat API v1.2](docs/API-CONTRACT.md), [responsabilités](docs/OWNERSHIP.md).
+- [Architecture serveur](backend/README.md), [STUDIO](studio/README.md), [protection des données](docs/DONNEES-ET-SAUVEGARDES.md).
+- [Direction artistique commune](docs/DESIGN-SYSTEM.md), [informations à compléter](INFORMATIONS-A-COMPLETER.md), [empreintes de l’aperçu d’origine](docs/source-snapshot.json).
 
-Les commandes d’origine restent conservées sous les noms `npm run dev:legacy`, `npm run build:legacy` et `npm run start:legacy`. Ces commandes historiques lancent Vinext et un Worker de prévisualisation avec D1 locale. Les commandes par défaut `dev`, `build` et `start` utilisent le parcours portable. Le code historique dépend d’un mécanisme d’identité spécifique à la plateforme de l’aperçu : ne jamais le déployer tel quel sur un Worker public. Claude reprend cette partie et décide de la réutilisation des opérations transactionnelles et tests.
-
-`.openai/hosting.json` ne conserve que les noms de bindings, pas l’identifiant du projet privé. Les scripts d’origine sont inclus pour conserver l’intégralité du travail. Les dépendances sont verrouillées dans `package-lock.json`. Aucun `.env`, base réelle, jeton, journal client ou artefact compilé n’est fourni.
-
-## État commercial
-
-DROP 01 : zip hoodie unisexe rose pastel, S/M/L, 350 GSM, 80 % coton / 20 % polyester, zip YKK et capuche doublée. Prix approuvé : 75 € hors livraison ; 4,90 € relais ou 8,50 € domicile, donc 79,90 € ou 83,50 € pour une pièce.
-
-30 produites, 2 offertes et 2 vendues : **26 théoriques**, sans répartition confirmée. Ce nombre n’est pas une autorisation d’initialiser la base. Le catalogue ne contient aucun stock. Les montants du navigateur servent à présenter l’aperçu ; seul le serveur pourra calculer et garantir une commande.
-
-Le stock utilise le contrat proposé `/api/stock`. Les appels catalogue, devis, checkout, relais, suivi et demandes sont préparés mais leur interface complète n’est pas raccordée. Le checkout visible reste explicitement une démonstration. Paiement réel, vrais relais, suivi, notifications et e-mails ne sont pas opérationnels.
-
-## Licence et confidentialité
-
-Le logo et les visuels SAYLESS sont conservés tels que fournis dans le projet. Aucun droit de réutilisation de la marque n’est accordé à des tiers. Les polices embarquées déclarent Apache 2.0 : texte complet et notices dans `public/store/assets/`. Le fichier de licence du composant technique d’origine est également conservé.
-
-Le rapport privé de Claude a été lu intégralement, mais n’est pas publié ici : il contient des informations de compte et financières. La synthèse technique ne contient ni solde, ni historique client, ni donnée d’authentification.
+Les scripts `*:legacy` restent disponibles pour l’étude du prototype. Le logo et les photos sont les ressources de la marque. Les notices des polices sont dans `public/store/assets/`. Le rapport d’automatisation privé et les données d’exploitation ne sont pas publiés.

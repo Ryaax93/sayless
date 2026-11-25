@@ -1,6 +1,6 @@
 # SAYLESS — Informations à confirmer avant l’ouverture des ventes
 
-État au 24 novembre 2026. Aucun paiement réel n’est activé par SAYLESS 2.0 ; le site officiel et ses réglages Stripe existants ne sont pas modifiés. Les paragraphes techniques du prototype ci-dessous sont à relire avec docs/ARCHITECTURE.md : Claude reprend le backend cible.
+État au 25 novembre 2026. Pour le raccordement en cours, voir la [revue](docs/REVUE-PR-1-WORK.md). L’inventaire reste physique et les paiements sont fermés.
 
 ## Données commerciales fournies
 
@@ -10,7 +10,7 @@
 | Stock restant théorique | 26 gilets ; inventaire physique et répartition par taille à confirmer |
 | Point relais | 4,90 € ; sélecteur réel non raccordé |
 | Colissimo domicile | 8,50 € |
-| Parcours | Coordonnées, puis livraison, puis total avant confirmation |
+| Parcours | Une pièce, livraison sur SAYLESS, devis et récapitulatif, CGV, vérification anti-abus, réservation puis coordonnées et paiement sur Stripe |
 | Un gilet livré | 79,90 € en relais prévu ; 83,50 € à domicile |
 
 La production initiale de 30 pièces est distincte des 26 pièces restantes : 2 pièces offertes et 2 vendues. Aucun stock par taille n’est inventé. Le total de 26 est théorique, pas encore issu d’un inventaire physique par variante. La branche v2 ne le présente plus comme une quantité disponible vérifiée. L’aperçu publié conserve sa version antérieure.
@@ -54,8 +54,8 @@ Valeurs issues de l’ancien site, sans validation physique. Elles restent provi
 
 - Transporteur de point relais choisi, compte marchand et accès à sa documentation ; identifiant public du widget si nécessaire, configuration sécurisée des accès serveur.
 - Sélecteur à raccorder à de vrais relais avec nom, adresse et identifiant ; correction du choix et enregistrement dans la commande. Le tarif seul ne rend pas cette intégration opérationnelle.
-- Pays et territoires desservis, exclusions, délais de préparation et d’acheminement.
-- Application des tarifs aux paniers multiples et éventuelles variations par destination.
+- Zone confirmée au lancement : France métropolitaine hors Corse. Renseigner les délais de préparation et d’acheminement.
+- Une pièce par commande au lancement. Faire valider les deux tarifs par le transporteur après pesée du colis complet.
 - Adresse de retour et procédure d’échange à confirmer.
 - Frais de retour validés par SAYLESS : client pour changement d’avis ou de taille ; bordereau gratuit fourni après vérification en cas de mauvais article ou de défaut.
 - Délais conservés dans les textes : 14 jours pour déclarer la rétractation, puis 14 jours pour renvoyer. Le délai de 7 jours après validation et une interdiction absolue d’essayage ne sont pas utilisés pour restreindre le droit légal.
@@ -65,12 +65,10 @@ Les clés secrètes devront être configurées dans l’espace sécurisé prévu
 
 ## Commandes, paiement et données personnelles
 
-- Stripe : accès de test et secret de signature à configurer dans les variables sécurisées, jamais dans ce document ou le code public. Les clés réelles sont refusées par le code livré.
-- Réception des webhooks : l’aperçu est privé, sa barrière de connexion bloque un appel Stripe extérieur. Un point de réception serveur accessible à Stripe et authentifié par signature doit être déployé et testé avant toute synchronisation effective. Aucun accès public n’a été ouvert.
-- Validation de la mise en service réelle et des moyens de paiement acceptés, après une commande de test complète.
-- Politique des annulations, retours et remboursements. Le remboursement seul ne remet jamais automatiquement une pièce en stock ; un retour physique revendable doit être confirmé séparément.
-- Commandes réelles, confirmations par e-mail, facturation et suivi des envois restent à raccorder. La base, les opérations de stock et la gestion de commandes isolées de test sont implémentées.
-- Durées de conservation et purge des identités administrateur, commandes et journaux : aucune purge automatique n’est encore configurée.
+- Valider les quatre corrections backend documentées dans la revue, le chiffrement des coordonnées et la version publiée des CGV.
+- Préparer D1 hébergée de test, Stripe test, réception des webhooks signés, Turnstile et les tests sur iPhone avec l’accord du fondateur. Aucune clé ni donnée client dans le dépôt.
+- Confirmer les wallets compatibles, le transporteur, les e-mails transactionnels, les preuves de réception, l’étiquette, le suivi et la restauration.
+- Choisir et valider les durées de conservation. Le mécanisme proposé dans la PR de Claude demeure désactivé tant que les durées ne sont pas approuvées.
 - Prestataires réels : hébergement, paiement, transport, e-mails, service client et éventuelles statistiques.
 - Pour chaque traitement : finalité, base légale, champs nécessaires, destinataires, conservation, pays de traitement et garanties en cas de transfert.
 - Identité du responsable et procédure pour les demandes d’exercice des droits.

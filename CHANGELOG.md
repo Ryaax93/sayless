@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## 2026-11-25 — Work · préparation sur le contrat v1.2
+
+- Revue des trois commits et des 44 fichiers de la PR nº 1. Quatre corrections demandées à Claude, documentées dans [la revue](docs/REVUE-PR-1-WORK.md).
+- Raccordement du catalogue, du stock, des relais, du devis signé, de la tentative idempotente et du statut après Stripe. Panier limité à une pièce, destination contrôlée, CGV et vérification anti-abus avant la réservation.
+- Paiements fermés par défaut. Aucune quantité théorique affichée. Retrait du prototype de gestion des fichiers servis. Textes de livraison et de confidentialité alignés avec les données du parcours.
+- Design, photos, logo et animations conservés. Contrôles du panier et du récapitulatif dans Chrome aux formats mobile et ordinateur.
+- 39 tests boutique, 13 assertions commerciales, 16 tests historiques d’inventaire, 57 tests backend/STUDIO et 8 tests croisés locaux. Trois contrôles métier supplémentaires échouent en attendant leurs corrections.
+- Passation technique et instructions de test actualisées. Les ressources de production, le backend et STUDIO restent sous la responsabilité de leurs propriétaires.
+
 ## 2026-11-24 (nuit) — Claude : SAYLESS STUDIO, connexion Face ID et inventaire guidé (PR n° 1)
 
 - `studio/` : première version de l’application, fidèle à la maquette validée (fond noir, rose pastel, étiquettes de taille, compteurs) et harmonisée avec la charte 2.0 (couleurs, SaylessDisplay, SaylessSans, logo officiel). Installable sur l’écran d’accueil de l’iPhone (manifeste, icônes), CSP stricte (`studio/_headers`).

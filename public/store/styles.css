@@ -157,3 +157,23 @@ body.menu-open{overflow:hidden}
 .product-info .drop-complete{padding:28px;margin-bottom:24px}
 .product-info .drop-complete h2{font-size:2rem}
 @media(max-width:760px){.drop-complete{padding:42px 24px}}
+
+/* Raccordement v1.2 : mêmes couleurs, polices et proportions que la boutique validée. */
+.checkout-action{margin-top:24px}
+.checkout-block p{margin:14px 0;max-width:40rem}
+.checkout-block .shipping-options{margin-top:26px}
+.checkout-error{border-left:3px solid #a32d57;overflow-wrap:anywhere}
+.checkout-error p{margin-top:12px}
+.terms-choice{display:flex;align-items:flex-start;gap:12px;margin:24px 0;font-size:.9375rem;line-height:1.7}
+.terms-choice input{width:20px;height:20px;flex:none;margin-top:3px;accent-color:var(--ink)}
+.terms-choice a{text-decoration:underline;text-underline-offset:3px}
+#checkout-pay{width:100%;margin-top:16px}
+#checkout-challenge{max-width:100%;min-width:0;overflow:hidden}
+#checkout-readiness,#challenge-status{margin-top:12px}
+.relay-results{margin-top:22px;max-height:440px;overflow:auto;scrollbar-gutter:stable}
+.relay-summary{padding:18px 0;border-bottom:1px solid var(--line);font-size:.9375rem;overflow-wrap:anywhere}
+.order-reference{margin-top:24px;overflow-wrap:anywhere}
+.tracking-page{max-width:800px;margin:auto}.tracking-page form{margin:32px 0}.tracking-page #tracking-result{margin-top:18px}
+.drop-paused{border-top:1px solid var(--line)}.drop-paused h2{overflow-wrap:anywhere}
+.summary-card .text-link{margin:16px 0}
+@media(max-width:760px){.terms-choice{font-size:1rem}.checkout-error,.checkout-page .small-text{font-size:.875rem}.checkout-steps{gap:12px}.checkout-block input{font-size:16px}.relay-results{max-height:none}.tracking-page h1{overflow-wrap:anywhere}}

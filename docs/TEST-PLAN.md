@@ -1,25 +1,22 @@
-# Vérification et conditions de lancement
+# Recette de la boutique intégrée
 
-## Tests automatisés livrés
+## Résultats locaux du 25 novembre 2026
 
-`npm run test:frontend` : 15 tests Node (contrat stock, fraîcheur, ruptures/réservations, panne réseau, checkout fermé, devis et relais requis, prix navigateur ignorés, redirection autorisée, idempotence de requête, PII hors URL, rendu du stock, démarrage portable et catalogue), plus 13 assertions commerciales.
+| Vérification | Résultat attendu sur la préparation |
+| --- | --- |
+| Boutique (Node) | 39 tests sur le client du contrat v1.2, le stock, les écrans, les tentatives, les retours, le site portable et son absence de paiement direct. |
+| Assertions commerciales | 13 vérifications de prix de présentation, de frais et du plafond. |
+| Inventaire hérité | 16 tests sur le prototype de référence. |
+| Backend et STUDIO de Claude | 57 tests sur Miniflare, stock, concurrence, notifications, remboursements, sauvegardes ordinaires et passkeys. |
+| Boutique avec routeur et D1 locale | 8 scénarios croisés avec des doubles Stripe et transporteur. |
+| Compilations locales | Boutique statique, STUDIO, Worker en dry-run et Pages Functions. |
+| Contrôles de revue, hors test nominal | 3 échecs métier sur le commit Claude examiné. Consulter la revue pour les résultats obtenus et attendus. Le défaut de récupération STUDIO a été vérifié séparément. |
 
-`npm run test:inventory` : 16 tests historiques sur Miniflare/D1 locale éphémère : 20 acheteurs pour 3 pièces, atomicité, déduplication, HMAC, montants/devises, ordre des notifications, expirations, échecs réseau, annulation concurrente, remboursement distinct du retour, ajustement concurrent, autorisation/CSRF et refus des paiements réels.
+Les suites nominales se lancent par `npm test`. Les trois critères ouverts se lancent par `npm run test:review`. Les prix de 79,90 € et 83,50 €, l’échec réseau, la réservation existante, un devis expiré, le double clic, les CGV, le code postal, le statut en attente et le paiement confirmé sont couverts. Les contrôles d’exploitation n’utilisent aucune donnée client.
 
-Ces tests utilisent exclusivement des fixtures explicitement de test. Ils ne prouvent pas une connexion Stripe, Boxtal, D1 distant, Discord ou Resend opérationnelle.
+La recette dans Chrome a couvert le panier, deux formats de page (390 et 1 440 px), les deux modes de livraison, les totaux et la commande de pause de la barre. La vérification sur iPhone et le contrôle d’accessibilité avec VoiceOver restent à réaliser.
 
-## Reproductibilité
-
-- Copie de travail indépendante de l’atelier, sans node_modules ou état D1 préexistant.
-- Processus du serveur statique lancé avec seulement PATH et PORT ; les fichiers publics répondent, les API refusent, les fichiers internes ne sont pas accessibles.
-- `npm ci` depuis le lock puis suites de tests ; `npm run build:storefront` ne publie rien.
-- Contrôle des références de ressources et des licences, liste exhaustive et empreintes source.
-- Relecture de la branche GitHub et comparaison de tous les blobs avec la copie locale après dépôt.
-- SHA de main et version de l’aperçu vérifiés avant/après ; aucun workflow de publication ajouté.
-
-## Recette navigateur
-
-Vues 320/390/1440 px : absence de débordement, logo et images chargés, navigation/clavier, modal panier/guide, toutes les pages légales, compteur sans détail par taille, animation continue et pause/reprise. Sur un chargement neuf, l’animation démarre ; ne pas livrer un onglet laissé en pause. Tester aussi réduction des animations et lecteurs d’écran sur les appareils cibles.
+Les 31 tests Node du dépôt initial (15 boutique et 16 inventaire) et les 13 assertions commerciales avaient également été rejoués sur le commit Claude, avant le raccordement.
 
 ## À réaliser avec Claude, avant toute vente
 

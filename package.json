@@ -14,15 +14,17 @@
     "db:generate": "drizzle-kit generate",
     "dev:storefront": "node scripts/dev-storefront.mjs",
     "build:storefront": "node scripts/build-storefront.mjs",
-    "test:frontend": "node --test tests/api-client.test.mjs tests/stock-display.test.mjs tests/portable.test.mjs && node tests/commerce.test.cjs",
+    "test:frontend": "node --test tests/api-client.test.mjs tests/stock-display.test.mjs tests/portable.test.mjs tests/checkout-flow.test.mjs tests/checkout-return.test.mjs && node tests/commerce.test.cjs",
     "test:inventory": "node --test tests/inventory.test.mjs",
     "test:backend": "node --test tests/backend/scenarios.test.mjs tests/backend/parity.test.mjs tests/backend/decisions.test.mjs tests/backend/studio.test.mjs",
     "check:cloudflare": "npm run build:studio && wrangler deploy --dry-run --outdir .wrangler/check-ops -c ops/wrangler.toml && wrangler pages functions build --outdir .wrangler/check-pages",
-    "test": "npm run test:frontend && npm run test:inventory && npm run test:backend",
+    "test": "npm run test:frontend && npm run test:inventory && npm run test:backend && npm run test:integration",
     "dev:legacy": "node scripts/run-framework.mjs dev",
     "build:legacy": "node scripts/run-framework.mjs build",
     "start:legacy": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
-    "build:studio": "node ops/build-studio.mjs"
+    "build:studio": "node ops/build-studio.mjs",
+    "test:integration": "node --test tests/frontend-integration.test.mjs",
+    "test:review": "node --test tests/review/business-invariants.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -70,7 +72,8 @@
     "typescript": "5.9.3",
     "vinext": "1.0.0-beta.5",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "wrangler": "4.92.0",
+    "miniflare": "4.20260515.0"
   },
   "type": "module",
   "overrides": {

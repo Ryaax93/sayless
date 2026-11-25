@@ -14,7 +14,7 @@
 | `data/products.json`, contrat API, configuration/build/dépendances | Commun | Proposition documentée, accord du responsable concerné avant changement incompatible |
 | Prix, inventaire initial, dépenses, remboursements, mise en production | Fondateur | Validation explicite |
 
-Cette répartition est celle demandée par le fondateur. Le contrat API est une **proposition de raccordement**, pas un accord déjà reçu de Claude. Sa première PR doit confirmer ou corriger ce contrat dans `docs/API-CONTRACT.md`, puis Work adaptera le client.
+Le contrat v1.2 de la PR nº 1 est utilisé par la branche Work de préparation. Les évolutions incompatibles doivent être coordonnées avec les deux responsables avant intégration.
 
 Procédure : créer une branche depuis v2 ; limiter le périmètre ; documenter dans CHANGELOG.md ; ouvrir une PR vers v2 avec problème, comportement et validation. Pour toucher un fichier de l’autre responsable, décrire d’abord la proposition et obtenir sa coordination dans cette PR ou la documentation. Ne pas auto-fusionner, ne pas déployer.
 
