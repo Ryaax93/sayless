@@ -63,6 +63,9 @@ export function randomCode(length, random = crypto.getRandomValues.bind(crypto))
   for (const b of bytes) out += CROCKFORD[b & 31];
   return out;
 }
+// Code tapé à la main (installation de STUDIO, codes de secours) : majuscules, sans espace ni
+// tiret, lettres ambiguës lues comme les chiffres de l'alphabet (O → 0, I et L → 1).
+export const normalizeCode = (code) => String(code ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
 // Référence publique : 40 bits aléatoires, sans caractère ambigu (pas de I, L, O, U).
 export const newReference = () => `SL-${randomCode(4)}-${randomCode(4)}`;
 export const uuid = () => crypto.randomUUID();

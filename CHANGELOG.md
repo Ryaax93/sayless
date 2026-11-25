@@ -1,5 +1,17 @@
 # Journal des modifications
 
+## 2026-11-25 (midi) — Claude : assistant de l’environnement de test et préparation de l’iPhone (PR n° 1)
+
+Le fondateur valide la préparation de l’environnement de test Cloudflare gratuit et isolé. Il confirme que les codes promo ne sont pas prioritaires pour le DROP 01 et que la purge automatique reste coupée.
+
+- **Assistant** `scripts/test-env.mjs` : une commande crée et vérifie, étape par étape, la base `sayless-test`, l’espace des sauvegardes et le Worker `sayless-ops-test` sur une adresse `*.workers.dev`, puis contrôle la santé en ligne. Il reprend après un arrêt, joint les secrets au premier envoi seulement, ne les affiche jamais et refuse tout secret non prévu. Configuration locale ignorée par Git (`ops/wrangler.test.local.toml`). Aucun domaine, DNS, Stripe réel ni boutique publique. Test T04 contre un Wrangler simulé, avec les contrôles servis par le vrai code du Worker. Configuration produite validée par le vrai Wrangler (`deploy --dry-run`).
+- **Procédure** `docs/CLOUDFLARE-TEST.md` réécrite pour Windows (Invite de commandes), du PC vierge à STUDIO sur l’écran d’accueil de l’iPhone.
+- **Codes tapés sur l’iPhone** : casse, espaces, tirets et confusions O/0, I/L/1 tolérés pour le code d’installation et les codes de secours ; un code d’installation de moins de 12 caractères utiles n’est jamais accepté. Champs sans majuscule automatique ni correction. Test S09.
+- **Secrets** : `CODE-STUDIO.txt` contient le seul code d’installation, pour ne pas ouvrir les autres secrets à l’écran.
+- **WebAuthn** : proposition commune à Work, `docs/WEBAUTHN-BIBLIOTHEQUE.md` (`@simplewebauthn/server` 14.0.3, répartition et critères d’acceptation). Rien n’est installé tant que Work et le fondateur n’ont pas validé.
+- **Tests** : `npm run test:backend` 86/86 ; `test:frontend` 15/15 et 13 vérifications commerciales ; recette navigateur sans erreur ni violation CSP ; `check:cloudflare` compilé.
+- **Non testé** : l’assistant avec un vrai compte Cloudflare et sur Windows. Premier essai réel par le fondateur.
+
 ## 2026-11-25 — Claude : corrections de la revue de Work, STUDIO complet, automatisations, environnement de test (PR n° 1)
 
 Corrections demandées par la revue de Work (`docs/REVUE-PR-1-WORK.md`, PR n° 2). Détail et correspondance des tests : `docs/AUDIT-V2-CLAUDE.md`, sections 9 à 12.

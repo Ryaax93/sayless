@@ -1,135 +1,121 @@
-# Environnement de test Cloudflare — procédure pas à pas
+# Environnement de test Cloudflare — pas à pas sur Windows
 
-**But** : essayer SAYLESS STUDIO sur ton iPhone, puis la boutique 2.0 complète avec Stripe en mode test, dans un environnement **entièrement séparé** de la boutique actuelle. Tout reste gratuit. Le domaine saylessbrand.fr, la boutique 1.0, le lien de paiement 1.0 et le Stripe réel ne sont **pas touchés**.
+**But** : installer SAYLESS STUDIO sur ton iPhone et l’essayer pour de vrai, dans un environnement **entièrement séparé** de la boutique actuelle. Tout reste gratuit. Le domaine saylessbrand.fr, le DNS, la boutique 1.0, le lien de paiement 1.0 et le Stripe réel ne sont **pas touchés**.
 
-Règles : une étape à la fois, vérifiée avant la suivante. Aucune clé secrète dans le chat, par e-mail ou dans GitHub : les secrets sont créés sur ton ordinateur et envoyés directement à Cloudflare. Rien n’est déployé sans ton accord.
+Règles : une étape à la fois, vérifiée avant la suivante. Aucune clé secrète dans le chat, par e-mail ou dans GitHub : les secrets sont créés sur ton PC et envoyés directement à Cloudflare. Même si une clé Stripe réelle était saisie par erreur, l’environnement de test la refuse.
 
-| | Test (cette procédure) | Production (plus tard, sur autorisation) |
+| | Test (cette procédure) | Production (plus tard, sur ton autorisation) |
 | --- | --- | --- |
 | STUDIO | `https://sayless-ops-test.<ton-sous-domaine>.workers.dev` | `https://studio.saylessbrand.fr` |
-| Boutique | `https://sayless-boutique-test.pages.dev` | `https://saylessbrand.fr` |
-| Base | D1 `sayless-test` | D1 `sayless-production` |
-| Stripe | Mode test (aucun vrai paiement) | Mode réel |
-| Coût | 0 € (offres gratuites) | 0 € au départ |
+| Base | D1 `sayless-test` | base séparée |
+| Stripe | aucun, puis mode test | mode réel |
+| Coût | 0 € (offres gratuites, sans carte bancaire) | 0 € au départ |
 
-Offres gratuites utilisées : Workers et Pages Functions (100 000 requêtes par jour, 10 ms de calcul par requête), D1 (500 Mo par base), Workers KV pour les sauvegardes, une tâche planifiée sur les 5 offertes. Aucun moyen de paiement n’est demandé pour ces offres.
+Offres gratuites utilisées : Workers (100 000 requêtes par jour, 10 ms de calcul par requête), D1 (500 Mo par base), Workers KV pour les sauvegardes (1 000 écritures par jour), une tâche planifiée sur les 5 offertes, journaux du Worker.
 
-## Étape 0 — Préparer l’ordinateur (10 min)
+Durée totale : environ 1 heure, une seule fois. Ensuite, tout se fait sur l’iPhone.
 
-1. Installer Node.js 22.13 ou plus récent (nodejs.org, version LTS).
-2. Récupérer le dépôt et la branche de vérification :
-   ```sh
-   git clone https://github.com/Ryaax93/sayless.git && cd sayless
-   git checkout claude/verification-v2
-   npm ci
+## Étape 1 — Préparer le PC (15 min)
+
+1. **Node.js** : sur nodejs.org, télécharge la version **LTS** (26.x) pour Windows et installe-la avec les choix par défaut. Laisse **décochée** la case qui propose d’installer des outils supplémentaires (Chocolatey, Python).
+2. **Git** : sur git-scm.com, télécharge Git pour Windows et installe-le avec les choix par défaut.
+3. Ouvre l’**Invite de commandes** : touche Windows, tape `cmd`, Entrée. Utilise-la pour toutes les commandes (PowerShell bloque `npm` par défaut).
+4. Vérifie :
+   ```bat
+   node -v
+   git --version
    ```
-3. Vérifier : `npm run test:backend` doit afficher `fail 0`.
+   Attendu : `v26.…` (22.13 minimum) et `git version 2.…`.
 
-## Étape 1 — Compte Cloudflare (5 min)
+## Étape 2 — Compte Cloudflare (10 min)
 
-1. Créer un compte gratuit sur dash.cloudflare.com (ou utiliser le tien). **N’ajoute aucun domaine** à cette étape.
-2. Dans le terminal : `npx wrangler login` (une page s’ouvre dans le navigateur : accepte). Aucun jeton à copier.
-3. Vérifier : `npx wrangler whoami` affiche ton adresse et ton compte.
+1. Sur dash.cloudflare.com/sign-up, crée un compte gratuit avec ton adresse SAYLESS et un mot de passe unique, puis confirme l’e-mail reçu.
+2. **N’ajoute aucun domaine ni site**, même si le tableau de bord le propose : passe cette étape.
+3. Sécurité : icône du profil en haut à droite → profil → **Authentification** → active la **double authentification** (application d’authentification). Garde ses codes de secours sur papier.
+4. Ouvre **Workers & Pages** (rubrique Compute). Si Cloudflare te demande un sous-domaine `workers.dev`, choisis un nom neutre, par exemple `sayless-test` : il fera partie de l’adresse de STUDIO.
 
-## Étape 2 — Base et espace de sauvegarde de test (5 min)
+## Étape 3 — Récupérer SAYLESS sur le PC (10 min)
 
-```sh
-npx wrangler d1 create sayless-test
-npx wrangler kv namespace create sayless-test-backups
+```bat
+cd %USERPROFILE%
+git clone -c core.autocrlf=false --branch claude/verification-v2 https://github.com/Ryaax93/sayless.git
+cd sayless
+npm ci
 ```
 
-Recopie les deux identifiants affichés (`database_id`, puis `id`) dans `ops/wrangler.toml`, section `[env.test]`, à la place des zéros. Ce ne sont pas des secrets. Puis applique le schéma :
+`npm ci` prend quelques minutes et affiche des avertissements : c’est normal. Il se termine par `added … packages`.
 
-```sh
-npx wrangler d1 migrations apply sayless-test --remote --env test -c ops/wrangler.toml
+## Étape 4 — Relier le PC à Cloudflare (2 min)
+
+```bat
+npx wrangler login
 ```
 
-Vérifier : la commande liste les 6 migrations, toutes « ✅ ».
+Une page s’ouvre dans le navigateur : connecte-toi à Cloudflare puis **Allow**. Le terminal affiche `Successfully logged in`. Aucun jeton à copier.
 
-## Étape 3 — Secrets de test, créés sur ton ordinateur (5 min)
+## Étape 5 — Installer l’environnement de test (5 min)
 
-```sh
-node scripts/generate-secrets.mjs --env test
+```bat
+node scripts/test-env.mjs
 ```
 
-Le script écrit dans `~/sayless-secrets-test/` (hors du dépôt, lisible par toi seul) : les secrets du Worker et de la boutique, les deux valeurs publiques, et la **clé privée des sauvegardes**. Lis `LISEZ-MOI.txt`.
+L’assistant fait et vérifie 8 étapes, chacune terminée par `OK` :
 
-```sh
-npx wrangler secret bulk ~/sayless-secrets-test/worker-secrets.json --env test -c ops/wrangler.toml
+1. connexion au bon compte ;
+2. secrets de test créés dans `%USERPROFILE%\sayless-secrets-test` (jamais affichés) ;
+3. base `sayless-test` (Europe de l’Ouest) ;
+4. espace des sauvegardes chiffrées ;
+5. tables de la base ;
+6. construction de STUDIO ;
+7. mise en ligne du Worker `sayless-ops-test`, secrets joints au premier envoi seulement ;
+8. contrôle en ligne.
+
+S’il s’arrête, il dit pourquoi et quoi faire ; relance ensuite la même commande, il reprend là où il en était. À la fin, il affiche l’adresse de STUDIO. Cette adresse n’est pas secrète.
+
+## Étape 6 — Installer STUDIO sur l’iPhone (10 min)
+
+1. Ouvre l’adresse de STUDIO dans **Safari** sur l’iPhone. Astuce : ouvre-la dans Edge sur le PC, clic droit sur la page → « Créer un code QR pour cette page », puis scanne-le avec l’appareil photo de l’iPhone.
+2. Sur le PC : `notepad %USERPROFILE%\sayless-secrets-test\CODE-STUDIO.txt`. Tape ce code sur l’iPhone (majuscules, tirets et espaces indifférents), touche « Vérifier le code », puis « Autoriser cet appareil » : Face ID.
+3. Recopie les **10 codes de secours sur papier**. Ils ne seront plus jamais affichés.
+4. Safari → Partager → **Sur l’écran d’accueil**. Ouvre ensuite STUDIO depuis son icône.
+5. Dans STUDIO ouvert depuis l’icône : Notifications → **Activer** → Autoriser.
+6. Vérifie : Plus → Santé du site.
+
+## Étape 7 — Ranger les secrets (5 min)
+
+- Copie `CLE-PRIVEE-SAUVEGARDES.json` sur une clé USB rangée, idéalement en deux exemplaires, puis supprime-la du PC. Sans elle, aucune sauvegarde ne peut être relue.
+- Garde le reste du dossier `sayless-secrets-test` sur le PC jusqu’à l’essai de la boutique de test : elle aura besoin des mêmes secrets.
+
+## Ensuite, chacun séparément
+
+Chaque secret se saisit avec l’assistant : la valeur ne s’affiche pas et part directement chez Cloudflare.
+
+- **Discord** : serveur ou salon privé → Paramètres du salon → Intégrations → Webhooks → Nouveau webhook → Copier l’URL, puis `node scripts/test-env.mjs secret DISCORD_WEBHOOK_URL`.
+- **E-mails (Resend, offre gratuite)** : sans domaine vérifié, Resend n’envoie qu’à l’adresse de ton compte Resend, ce qui suffit pour les essais. Vérifier le domaine demanderait une modification du DNS : pas avant ton accord. `node scripts/test-env.mjs secret RESEND_API_KEY`, puis `node scripts/test-env.mjs reglage EMAIL_FROM "SAYLESS <onboarding@resend.dev>"`.
+- **Stripe en mode test** : clé de test et webhook de test seulement (`secret STRIPE_SECRET_KEY`, `secret STRIPE_WEBHOOK_SECRET`). Procédure détaillée au moment de l’essai de paiement.
+
+Contrôle à tout moment : `node scripts/test-env.mjs etat`.
+
+## Mettre à jour après une nouvelle version
+
+```bat
+cd %USERPROFILE%\sayless
+git pull
+npm ci
+node scripts/test-env.mjs
 ```
 
-Dans `ops/wrangler.toml`, section `[env.test.vars]`, ajoute les deux lignes de `public-values.txt` (`VAPID_PUBLIC_KEY`, `BACKUP_PUBLIC_KEY`). Elles sont publiques.
-
-Copie `CLE-PRIVEE-SAUVEGARDES.json` hors ligne (clé USB rangée, coffre), puis efface-la de l’ordinateur. Sans elle, personne, pas même Cloudflare ou moi, ne peut relire une sauvegarde.
-
-## Étape 4 — STUDIO en ligne, puis sur ton iPhone (10 min)
-
-```sh
-npm run build:studio
-npx wrangler deploy --env test -c ops/wrangler.toml
-```
-
-La commande affiche l’adresse du Worker, par exemple `https://sayless-ops-test.ton-sous-domaine.workers.dev`. Recopie-la dans `[env.test.vars]` : `STUDIO_ORIGIN` (adresse complète) et `STUDIO_RP_ID` (la même, sans `https://`). Redéploie avec la même commande : sans ces deux valeurs, STUDIO refuse de démarrer en recette.
-
-Vérifier : `https://…workers.dev/health` affiche `"ok": true`.
-
-Sur l’iPhone, dans Safari :
-1. Ouvre l’adresse du Worker. Saisis le code d’installation (`ADMIN_SETUP_CODE` dans `worker-secrets.json`), touche « Vérifier le code », puis « Autoriser cet appareil » : Face ID.
-2. Note les 10 codes de secours **sur papier**. Ils ne seront plus affichés.
-3. Partager → « Sur l’écran d’accueil » : STUDIO s’ouvre ensuite comme une app.
-4. Essaie : inventaire guidé, réglages, notifications (« Activer » demande l’autorisation de l’iPhone).
-
-Le code d’installation ne sert qu’une fois. Tu peux ensuite le retirer : `npx wrangler secret delete ADMIN_SETUP_CODE --env test -c ops/wrangler.toml`.
-
-## Étape 5 — Stripe en mode test (15 min)
-
-1. Dans Stripe, bascule sur **Mode test** (interrupteur en haut à droite). Rien ne touche le compte réel.
-2. Développeurs → Clés API → **Clé restreinte** « SAYLESS test » avec les droits : Checkout Sessions (écriture), Refunds (écriture), Charges (lecture), Balance (lecture), Payment Links (lecture).
-3. Développeurs → Webhooks → Ajouter un point de terminaison : `https://…workers.dev/webhooks/stripe`, événements `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`.
-4. Saisis les deux valeurs **directement dans le terminal** (elles ne s’affichent pas) :
-   ```sh
-   npx wrangler secret put STRIPE_SECRET_KEY --env test -c ops/wrangler.toml
-   npx wrangler secret put STRIPE_WEBHOOK_SECRET --env test -c ops/wrangler.toml
-   ```
-
-Vérifier : dans STUDIO, Santé du site → « Paiement Stripe : mode test ».
-
-## Étape 6 — Boutique de test (Work, 15 min)
-
-À faire avec le projet de Work une fois sa branche validée :
-
-```sh
-npx wrangler pages project create sayless-boutique-test --production-branch main
-npx wrangler pages secret bulk ~/sayless-secrets-test/pages-secrets.json --project-name sayless-boutique-test
-npm run build:storefront
-npx wrangler pages deploy dist-storefront --project-name sayless-boutique-test --branch main
-```
-
-Dans le tableau de bord Cloudflare (Workers & Pages → sayless-boutique-test → Paramètres) : liaison D1 `DB` = `sayless-test` ; variables `ENVIRONMENT = staging`, `PUBLIC_ORIGIN = https://sayless-boutique-test.pages.dev`, `TURNSTILE_BYPASS = test-only` tant que Turnstile n’est pas créé. Ajoute aussi `STRIPE_SECRET_KEY` et `STRIPE_WEBHOOK_SECRET` (mêmes valeurs de test) en secrets. Redéploie.
-
-La boutique de test et STUDIO partagent la même base de test : une commande de test apparaît dans STUDIO.
-
-## Étape 7 — Ouvrir la boutique de test
-
-1. STUDIO → Réglages : publie une version de test des CGV, enregistre l’inventaire, puis « Ouverte ». STUDIO refuse tant qu’un prérequis bloquant manque, et dit lequel.
-2. Paiement test avec la carte `4242 4242 4242 4242`, date future, CVC quelconque. Aucun argent ne circule.
-3. Rejouer la recette de `docs/TEST-PLAN.md`, y compris sur l’iPhone et avec VoiceOver.
-
-## Étapes facultatives (chacune séparément)
-
-- **Discord** : salon privé → Intégrations → Webhook → `npx wrangler secret put DISCORD_WEBHOOK_URL --env test -c ops/wrangler.toml`.
-- **Turnstile** (gratuit) : créer un widget pour `sayless-boutique-test.pages.dev` ; clé secrète en secret Pages `TURNSTILE_SECRET` ; clé publique dans la configuration de la boutique (Work) ; retirer `TURNSTILE_BYPASS`.
-- **E-mails clients (Resend, offre gratuite)** : demande un domaine vérifié. Sans domaine, Resend n’envoie qu’à ta propre adresse : pratique pour un premier essai. Secrets `RESEND_API_KEY`, variable `EMAIL_FROM`, dans le Worker **et** la boutique.
+Les secrets déjà envoyés ne sont jamais remplacés ; seules les nouvelles migrations sont appliquées.
 
 ## Sauvegardes : vérifier qu’elles se relisent (une fois par mois)
 
 1. STUDIO → Santé du site → Sauvegardes chiffrées → Télécharger.
-2. Sur l’ordinateur, avec la clé privée branchée :
-   ```sh
-   node scripts/restore-backup.mjs --backup ~/Téléchargements/sayless-sauvegarde-….json --key /Volumes/CLE/CLE-PRIVEE-SAUVEGARDES.json
+2. Sur le PC, clé USB branchée :
+   ```bat
+   node scripts/restore-backup.mjs --backup "%USERPROFILE%\Downloads\sayless-sauvegarde-….json" --key E:\CLE-PRIVEE-SAUVEGARDES.json
    ```
    Résultat attendu : « Contrôle réussi ».
 
 ## Ce que cette procédure ne fait pas
 
-Aucun changement DNS, aucun domaine ajouté, aucune clé Stripe réelle, aucune modification du lien 1.0, aucune dépense. Le passage en production fera l’objet d’une procédure séparée, soumise à ton autorisation.
+Aucun domaine ajouté, aucun changement DNS, aucune clé Stripe réelle, aucune modification du lien 1.0 ni de la boutique publique, aucun abonnement, aucune dépense. Le passage en production fera l’objet d’une procédure séparée, soumise à ton autorisation.

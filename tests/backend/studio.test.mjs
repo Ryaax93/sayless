@@ -217,3 +217,19 @@ test('S08 récupération : page rechargée = nouveau défi pour le même apparei
   b.clock.t += 16 * 60;
   assert.equal((await b.call('POST', '/api/admin/recover/options', {})).body.error, 'already_enrolled');
 });
+
+test('S09 codes tapés sur l’iPhone : casse, espaces, tirets et O/0, I/L/1 tolérés ; code d’installation trop court refusé', async () => {
+  const b = await studio();
+  b.env.ADMIN_SETUP_CODE = '7K3D-0W1Q-ZX9M-4HTB';
+  assert.equal((await b.call('POST', '/api/admin/setup/options', { setup_code: '7K3D-0W1Q-ZX9M-4HTC' })).body.error, 'invalid_setup_code');
+  assert.equal((await b.call('POST', '/api/admin/setup/options', { setup_code: ' 7k3d oW lq zx9m 4htb ' })).status, 200, 'minuscules, espaces, O pour 0 et l pour 1');
+  const weak = await studio();
+  weak.env.ADMIN_SETUP_CODE = 'abc-123';
+  assert.equal((await weak.call('POST', '/api/admin/setup/options', { setup_code: 'abc-123' })).body.error, 'invalid_setup_code', 'moins de 12 caractères utiles : jamais accepté');
+
+  const c = await studio();
+  const { res } = await c.enroll();
+  c.forget();
+  const typed = res.body.recovery_codes[5].replace(/0/g, 'O').replace(/1/g, 'l').toLowerCase().replace('-', ' - ');
+  assert.equal((await c.call('POST', '/api/admin/recover', { code: typed })).status, 200);
+});

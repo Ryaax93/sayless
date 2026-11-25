@@ -214,7 +214,7 @@ const screens = {
       content = `<p class="p strong">Code vérifié. Autorise cet appareil avec Face ID.</p>${btn('enroll-create', `${I.face} Autoriser cet appareil`)}`;
     } else if (!s.enrolled && !s.enrollment_open) {
       content = `<label class="sr-only" for="setup">Code d’installation</label>
-        <div class="field wide"><input id="setup" data-fk="setup" autocomplete="one-time-code" placeholder="Code d’installation" maxlength="64"></div>
+        <div class="field wide"><input id="setup" data-fk="setup" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="Code d’installation" maxlength="64"></div>
         ${btn('enroll-check', 'Vérifier le code')}`;
     } else {
       content = btn('login', `${I.face} Se connecter avec Face ID`, { disabled: !s.enrolled });
@@ -228,7 +228,7 @@ const screens = {
   recover: () => `<header class="top"><button class="back" data-action="go-login" data-fk="go-login">${I.back} Retour</button></header>
     <div class="body fade"><div class="heading"><h1 class="h1 screen-title" tabindex="-1" data-fk="title">Code de secours</h1>
       <p class="s">Un code s’utilise une seule fois. Il retire tous les appareils et sessions, puis autorise ce nouvel appareil pendant 15 minutes.</p></div>
-      ${errorBox()}<div class="field"><label class="sr-only" for="code">Code de secours</label><input id="code" data-fk="code" autocomplete="one-time-code" placeholder="XXXX-XXXX" maxlength="9"></div>
+      ${errorBox()}<div class="field"><label class="sr-only" for="code">Code de secours</label><input id="code" data-fk="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="XXXX-XXXX" maxlength="12"></div>
       ${btn('recover-check', 'Valider le code')}</div>`,
   codes: () => `<div class="body fade"><div class="heading"><h1 class="h1 screen-title" tabindex="-1" data-fk="title">Codes de secours</h1>
       <p class="s">Note-les maintenant, hors ligne. Ils ne seront plus jamais affichés. Chacun ne sert qu’une fois.</p></div>

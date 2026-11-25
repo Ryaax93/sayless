@@ -58,12 +58,21 @@ await write('worker-secrets.json', `${JSON.stringify({ ...shared, ADMIN_SETUP_CO
 await write('pages-secrets.json', `${JSON.stringify(shared, null, 2)}\n`);
 await write('public-values.txt', `VAPID_PUBLIC_KEY=${vapidPublic}\nBACKUP_PUBLIC_KEY=${JSON.stringify(backupPublic)}\n`);
 await write('CLE-PRIVEE-SAUVEGARDES.json', `${JSON.stringify(backupPrivate, null, 2)}\n`);
+await write('CODE-STUDIO.txt', [
+  `Code d’installation de SAYLESS STUDIO (${env}) :`,
+  '',
+  `    ${setupCode}`,
+  '',
+  'À taper une seule fois sur ton iPhone, à la première ouverture de STUDIO.',
+  'Ne le colle jamais dans un chat, un e-mail ou GitHub.',
+  '',
+].join('\r\n'));
 await write('LISEZ-MOI.txt', [
   `Secrets SAYLESS (${env}) générés le ${new Date().toISOString()}.`,
-  '1. Envoyer les secrets : voir docs/CLOUDFLARE-TEST.md (wrangler secret bulk).',
-  '2. Code d’installation de STUDIO (à saisir une seule fois sur l’iPhone) : dans worker-secrets.json, ADMIN_SETUP_CODE.',
+  '1. Envoyer les secrets : node scripts/test-env.mjs s’en charge (voir docs/CLOUDFLARE-TEST.md).',
+  '2. Code d’installation de STUDIO (à saisir une seule fois sur l’iPhone) : CODE-STUDIO.txt.',
   '3. Copier CLE-PRIVEE-SAUVEGARDES.json hors ligne (clé USB rangée, coffre), puis l’effacer de cet ordinateur.',
-  '4. Effacer ce dossier une fois les secrets envoyés : ils restent chez Cloudflare.',
+  '4. Effacer ce dossier une fois STUDIO installé sur l’iPhone : les secrets restent chez Cloudflare.',
   'Ne jamais envoyer ces fichiers par e-mail, messagerie, chat ou GitHub.',
-].join('\n'));
+].join('\r\n'));
 console.log(`Secrets écrits dans ${out} (lisibles par toi seul). Suis docs/CLOUDFLARE-TEST.md pour les envoyer à Cloudflare.`);
