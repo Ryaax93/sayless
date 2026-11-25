@@ -23,8 +23,8 @@ Fondateur (iPhone, Mac) ─► studio.saylessbrand.fr (phase B : STUDIO + /api/a
 | Phase | Contenu | Responsable | Terminée quand |
 | --- | --- | --- | --- |
 | A — cette PR | Audit, contrat v1.1, backend unique, migrations, tests, compilation Cloudflare | Claude | Revue de Work et accord du fondateur |
-| B | STUDIO fonctionnel à partir de la maquette validée (harmonisée avec `DESIGN-SYSTEM.md`). Déjà branchés : connexion Face ID, codes de secours, inventaire guidé. À suivre : commandes, stock, finances, notifications, pause | Claude | Tests + essai sur iPhone |
-| C | Discord, notifications push, e-mails Resend en test, rapport quotidien, exports, sauvegardes | Claude | Messages testés et validés par le fondateur |
+| B | STUDIO fonctionnel à partir de la maquette validée (harmonisée avec `DESIGN-SYSTEM.md`). Branchés et testés en local (API + Chrome) : tous les écrans de la maquette, iPhone et ordinateur. Reste : essai sur un vrai iPhone | Claude | Tests + essai sur iPhone |
+| C | Discord, notifications push, e-mails Resend en test, rapport quotidien, exports, sauvegardes. Code et tests locaux faits ; chaque canal s’active quand son secret est saisi | Claude | Messages testés et validés par le fondateur |
 | D | Points relais, étiquettes et suivi (après pesée et choix du transporteur) | Claude | Bac à sable du transporteur |
 | E | Raccordement de la boutique au contrat v1.1 | Work | Tests frontend + parcours complet |
 | F | Environnement de test réel (Cloudflare gratuit, Stripe test) : tous les tests rejoués | Claude + fondateur | Rapport de recette |
@@ -44,6 +44,7 @@ Fondateur (iPhone, Mac) ─► studio.saylessbrand.fr (phase B : STUDIO + /api/a
 8. `customer_token` n’est plus utilisé : il peut être retiré du client.
 9. **Turnstile** : widget avec la clé publique (donnée à l’étape Cloudflare), nouveau jeton à chaque tentative ; une reprise avec la même clé d’idempotence n’en a pas besoin.
 10. Propositions communes : déclarer `miniflare` en devDependency ; retirer Next/Vinext et les scripts `*:legacy` s’ils ne servent plus.
+11. **Contrat v1.3 (proposé le 25 novembre, additif)** : afficher et renvoyer `terms_version` du devis ; sur `attempt_closed`, utiliser `payment_status` et `session_id` pour montrer `/merci` d’une tentative payée ; afficher l’adresse `address` des points relais ; page `#/suivi` : lire `t` dans le fragment et appeler `GET /api/order` avec `Authorization: Bearer` ; formulaires contact et rétractation sur `POST /api/requests` (référence affichée seulement en cas de succès).
 
 ## Configuration guidée, une étape à la fois
 
@@ -53,9 +54,9 @@ Chaque étape est vérifiée avant la suivante. Aucune clé secrète ne transite
 | --- | --- | --- | --- |
 | 1 | Inventaire physique S/M/L et pesée d’un colis emballé | — | En cours (fondateur) |
 | 2 | Accès GitHub de Claude limité au dépôt `Ryaax93/sayless` (pousser la branche, ouvrir la PR) | — | Fait (PR brouillon n° 1) |
-| 3 | Compte Cloudflare gratuit : base D1 de test, projets de test sans domaine | 2 | À faire |
+| 3 | Compte Cloudflare gratuit : base D1 de test, projets de test sans domaine (procédure : `CLOUDFLARE-TEST.md`) | 2 | À faire |
 | 4 | Stripe en mode test : clé restreinte et webhook de test, saisis dans Cloudflare | 3 | À faire |
 | 5 | Discord : webhook d’un salon privé | 3 | À faire |
 | 6 | Turnstile (gratuit) | 3 | À faire |
 | 7 | Recette complète sur l’infrastructure de test | 1 à 6 | À faire |
-| 8 | Production : lien 1.0 (limite = 2 + pièces disponibles, message SOLD OUT), Klarna et Google Pay, DNS, contact@, clés de production | 7 + autorisation | À faire |
+| 8 | Production : lien 1.0 (limite = 2 + pièces disponibles, message SOLD OUT), Google Pay sur les appareils compatibles (Klarna exclu), DNS, contact@, clés de production | 7 + autorisation | À faire |

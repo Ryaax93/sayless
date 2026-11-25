@@ -1,13 +1,14 @@
 # Audit de SAYLESS 2.0 et intégration du backend — Claude
 
-**Base auditée : branche `v2`, commit `3dc079b95e0bb7ef42124c0b39936eb5e84a5419` (24 novembre 2026).**
-Travail livré sur `claude/integration-v2`. Rien n’est déployé ; `main`, le domaine, Stripe et le site publié sont inchangés.
+**Base auditée : branche `v2`, commit `3dc079b95e0bb7ef42124c0b39936eb5e84a5419` (24 novembre 2026). Mise à jour du 25 novembre : revue de Work (PR n° 2, commit `6832ccd`) traitée, sections 9 à 12.**
+Travail livré sur `claude/integration-v2`. Rien n’est déployé ; `main`, `v2`, le domaine, Stripe et le site publié sont inchangés.
 
 ## 1. En bref
 
 - La boutique de Work est saine et prête à être raccordée : client API strict (stock vérifié et frais de moins de 30 s, aucun prix envoyé par le navigateur, redirection limitée à `checkout.stripe.com`), états de stock distincts, message SOLD OUT conditionné à une confirmation serveur.
 - Le backend hérité (`server/`, `drizzle/`, `public/store/admin.js`) contient de bonnes protections, mais il est incompatible avec la cible : total de 26 imposé, administration liée aux en-têtes de l’hébergeur de l’aperçu, environnement mêlé dans une colonne `scope`, runtime Vinext, et il lui manque le balayage, les alertes, le registre immuable, le lien 1.0, etc.
 - Résultat : **un seul backend** (`backend/`), **une seule source de vérité du stock** (registre en ajout seul), **une seule gestion des commandes**. Les protections de Work et les 29 scénarios de Claude y sont repris et testés.
+- 25 novembre : les quatre défauts confirmés par Work sont corrigés, ses trois tests de revue passent, chaque correction a son test de régression (section 9). STUDIO couvre tous les écrans de la maquette avec des données réelles de la base ; les automatisations gratuites sont raccordées et testées en local (section 11).
 
 ## 2. Ce qui a réellement été vérifié
 
@@ -90,3 +91,76 @@ Travail livré sur `claude/integration-v2`. Rien n’est déployé ; `main`, le 
 | Conservation | Durées proposées selon les obligations légales | Proposition à valider ; purge coupée par défaut |
 | Stock par taille | Minimisation des données publiques | États et quantité commandable seulement ; total exact du drop |
 | Sauvegardes | Chiffrées, restaurables, hors base principale, sans abonnement, rien dans GitHub | KV gratuit + copie hebdomadaire hors Cloudflare, clé privée chez le fondateur |
+
+## 9. Revue de Work (PR n° 2) : corrections du 25 novembre 2026
+
+Revue : `docs/REVUE-PR-1-WORK.md` et `docs/HANDOFF-CLAUDE.md` (branche de Work). Les trois tests de Work (`npm run test:review`) échouaient sur le commit revu ; ils passent sur la branche de vérification qui réunit les deux travaux.
+
+| Défaut confirmé par Work | Correction | Preuve |
+| --- | --- | --- |
+| STUDIO : une session de l’ancienne passkey restait valable après récupération | Générations de passkeys. Le code de secours, dans la **même instruction SQL** (déclencheur `studio_recovery_used`), passe à la génération suivante, révoque passkeys, sessions et défis précédents. Toute session est liée à une passkey active de la génération courante, vérifiée à chaque requête et garantie par la base (`studio_session_admission`). Inscription après récupération réservée à l’appareil qui a saisi le code (cookie dédié, 15 min) | S07, S08 ; scénario de Work rejoué |
+| Lien 1.0 : date de création de la session prise pour la date du règlement ; tout lien du compte accepté | Lien et prix autorisés reconnus explicitement (`legacy_payment_link_id`, `legacy_link_price_id`). Une ligne, quantité 1, prix catalogue, euro. Instant réel du règlement : la charge Stripe, bornée par l’événement signé. Ventes proches de l’inventaire (24 h) ou ambiguës : « à vérifier », pièce retirée par prudence, décision du fondateur dans STUDIO. Jamais de double décompte (renvoi de notification compris) | R01, R02 ; test de revue « vente 1.0 après inventaire » : 0 pièce |
+| Reprise : `quote_expired` à 11 min alors que la session et la réservation étaient ouvertes | Clé d’idempotence cherchée avant l’expiration du devis ; même session, même réservation, même clé Stripe ; tentative close renvoyée avec son état et sa session. Le balayage garde une session retrouvée pendant la réservation | R03, R04, R10 ; t11, t26 ; test de revue « reprise à 11 min » |
+| Sauvegarde : image lue table par table, incohérente pendant une vente | Image lue en **un seul lot D1** (instantané cohérent), contrôlée (stock = registre, réservations, ventes, lignes orphelines), chiffrée, **relue et comparée** (SHA-256) après écriture. Rotation seulement après une copie vérifiée : une copie défectueuse ne chasse jamais une bonne. Restauration par lots contrôlée | R05, R06, U09 ; test de revue « sauvegarde pendant une vente » ; exercice de restauration (`scripts/restore-backup.mjs`) |
+
+| Autre écart relevé par Work | Correction | Preuve |
+| --- | --- | --- |
+| Inventaire contrôlé sur les seuls SKU commandés | Devis et réservation refusés tant qu’une taille **du produit** n’est pas confirmée (règle de la base, `rs_admission`) | R07 |
+| CGV : version vide acceptée | Table `terms_documents` (texte conservé, jamais modifié). Sans CGV publiées : `503 not_configured`. Version signée dans le devis et vérifiée au paiement | R07, U05 |
+| Chiffrement des coordonnées contrôlé après paiement | Ouverture impossible sans clé valide (`piiReady`). Coordonnées scellées et liées à la commande (AES-GCM, données associées `order:<id>`). Contact non scellé : commande « à vérifier », jamais expédiée | R07, R08 |
+| WebAuthn « maison » | Audit point par point (section 10) | A01 à A03 |
+| Focus et VoiceOver dans STUDIO | Focus restauré sur le contrôle utilisé après chaque rendu, titre d’écran focalisé, annonces `aria-live` | Recette Chrome. VoiceOver réel non testé |
+| Zone : relais et devis non unifiés ; adresse du relais non conservée | Mêmes refus sur la recherche et le devis ; points fermés ou hors zone écartés ; adresse normalisée ; relais figé dans la commande (`relay_snapshot`) ; domicile hors zone saisi sur Stripe : « à vérifier », expédition refusée par la base | R09, U02 |
+| Klarna encore cité dans le plan | Plan et contrat corrigés : carte, Apple Pay et Google Pay, Klarna exclu | Documentation |
+| Portée de `total_available` | Précisée dans le contrat v1.3 (total du produit ; épuisement du drop calculé à l’échelle du drop) | Documentation |
+
+## 10. Audit WebAuthn (passkeys de STUDIO)
+
+Référence : W3C Web Authentication niveau 3, §7.1 (inscription) et §7.2 (connexion). Chaque contrôle est testé avec de vraies signatures (ES256 et RS256), y compris les refus.
+
+| Étape de la spécification | Contrôle | Test |
+| --- | --- | --- |
+| §7.1 5-6 et §7.2 9-10 | `clientDataJSON` lu en UTF-8 puis JSON ; champ manquant refusé | A01, A02 |
+| §7.1 7 et §7.2 11 | Type `webauthn.create` ou `webauthn.get` exact | A01, A02 |
+| §7.1 8 et §7.2 12 | Défi exact, à usage unique, lié à son usage, valable 5 min | A01, S02, S08 |
+| §7.1 9 et §7.2 13 | Origine exacte de STUDIO (figée par environnement : sans `STUDIO_ORIGIN`, STUDIO refuse de démarrer en recette et en production) | A01, A02, S02 |
+| §7.1 10 et §7.2 14 | `crossOrigin` et `topOrigin` refusés (STUDIO n’est jamais intégré dans une autre page) | A01 |
+| §7.1 12 | `attestationObject` lu par un lecteur CBOR strict : longueurs, imbrication, clés en double, types inattendus | A03 |
+| §7.1 13 et §7.2 15 | Empreinte du domaine (`STUDIO_RP_ID`) | A01, A02, S02 |
+| §7.1 14-15 et §7.2 16-17 | Présence et vérification de l’utilisateur exigées | A01, A02, S02 |
+| §7.1 16-17 et §7.2 18-19 | Drapeaux de sauvegarde cohérents (BS sans BE refusé) ; passkey iCloud synchronisée acceptée | A01, A02 |
+| §7.1 19 | Algorithme parmi ceux proposés (ES256, RS256) | A01 |
+| §7.1 20 | Extensions de l’authentificateur lues (drapeau ED), aucune donnée en trop | A01 |
+| §7.1 21-24 | Attestation « none » seulement (politique : aucune liste de fabricants à maintenir) | A01 |
+| §7.1 25-26 | Identifiant de 16 à 1 023 octets (A01) ; jamais déjà inscrit (clé primaire de la base) | A01 |
+| §7.2 5-6 | Passkey connue, active, de la génération courante ; identifiant d’utilisateur vérifié s’il est fourni | A02, S07 |
+| §7.2 21 | Signature vérifiée sur `authenticatorData ‖ SHA-256(clientDataJSON)` | A02, S02 |
+| §7.2 22 | Compteur qui recule : connexion refusée et alerte critique (clone possible) ; compteur à 0 d’une passkey synchronisée accepté | A02, S02 |
+
+Limites :
+
+- **Bibliothèque éprouvée.** L’ajout de `@simplewebauthn/server` (dépendance de développement et d’exécution) a été refusé par les règles d’autorisation de l’environnement de travail de Claude ; il n’a pas été contourné. L’implémentation actuelle reste sans dépendance, durcie et testée point par point. Ajouter une bibliothèque change `package.json`, fichier commun : décision à prendre avec le fondateur et Work. Une revue par un spécialiste reste recommandée avant la production.
+- **Face ID.** WebAuthn atteste une vérification de l’utilisateur par l’appareil, pas la méthode employée : sur iPhone, Face ID ou, à défaut, le code de l’appareil. STUDIO exige cette vérification à chaque connexion et à chaque action sensible.
+- **Safari et iPhone.** Les cérémonies démarrent dans le geste de l’utilisateur (exigence de Safari), mais seul Chrome avec un authentificateur virtuel a été essayé. Inscription, récupération et révocation sur un vrai iPhone font partie de la recette de l’environnement de test (`docs/CLOUDFLARE-TEST.md`).
+
+## 11. SAYLESS STUDIO et automatisations : état réel
+
+| Élément | État |
+| --- | --- |
+| Écrans de la maquette : aujourd’hui, commandes, préparation et expédition, stock et mouvements, inventaire guidé, retours et remboursements, finances et rentabilité, drops, performances, notifications, santé du site, historique, réglages, demandes des clients, vues iPhone et ordinateur | Branchés sur la base, testés (U01 à U09) et parcourus dans Chrome à 390 et 1 440 px, sans erreur ni violation CSP |
+| Codes promo | Non pris en charge par la v2 : affiché comme tel, aucun faux bouton. Demande un changement du devis, à coordonner avec Work |
+| Visites | Non mesurées : affiché comme tel, aucun chiffre inventé |
+| Discord, notifications iPhone (Web Push, sans service payant), e-mails Resend | Code et tests avec services simulés ; actifs seulement quand leurs secrets sont saisis. Aucun envoi réel effectué |
+| Rapport de 10 h (heure de Paris), alertes de stock bas et SOLD OUT sans doublon, suivi des commandes | Testés (T01, t19, U02, U08) |
+| Sauvegardes chiffrées | Copie quotidienne vérifiée, liste et téléchargement dans STUDIO (Face ID, journalisé), exercice de restauration testé de bout en bout (U09, recette navigateur) |
+| Surveillance | Écran Santé, battement de la tâche planifiée, alertes critiques, `/health` lisible par un service de surveillance externe (T03) |
+| Exports | Livre des recettes et commandes (CSV), confirmation Face ID, journalisés (U04) |
+| Suivi, contact, rétractation | Routes raccordées ; actives quand l’envoi d’e-mails est configuré, sinon refus explicite (U08, C04) |
+| Purge automatique | Coupée, en attente de la validation des durées par le fondateur |
+
+## 12. Risques et limites restants
+
+- Rien n’a été essayé sur Cloudflare réel, Stripe en mode test réel, Resend réel, un vrai iPhone (Safari, VoiceOver, notifications), ni avec un transporteur : procédure prête dans `docs/CLOUDFLARE-TEST.md`, à lancer avec l’accord du fondateur.
+- Offre gratuite : 10 ms de calcul par exécution planifiée. La sauvegarde a sa propre minute ; sa durée réelle est à mesurer dans l’environnement de test.
+- Le lien de paiement 1.0 affiche les moyens de paiement dynamiques du compte (Klarna possible) : décision du fondateur, rien n’a été modifié dans Stripe.
+- À saisir par le fondateur dans STUDIO : identifiants du lien 1.0, investissement, quantités reçues et offertes, inventaire physique, CGV.

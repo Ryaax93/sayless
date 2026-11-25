@@ -40,10 +40,13 @@ Principe CNIL : suppression à la fin du contrat, archive intermédiaire sépar�
 | 2 | Copie quotidienne chiffrée après 3 h (heure de Paris) ; 30 quotidiennes + 12 mensuelles | Workers KV `BACKUPS`, séparé de la base (offre gratuite : 1 Go, 1 000 écritures par jour) | Gratuit |
 | 3 | Copie hors Cloudflare chaque semaine : téléchargement depuis STUDIO (confirmation Face ID, journalisé) vers ton propre support | Ton stockage personnel | Gratuit |
 
-- **Chiffrement** : compression gzip, AES-256-GCM, clé enveloppée par RSA-OAEP 3072 avec ta **clé publique**. La clé privée est créée sur ton appareil et n’en sort jamais : ni Cloudflare, ni GitHub, ni le chat ne peuvent relire une copie. Garde-la en deux exemplaires hors ligne : sans elle, les copies sont illisibles.
-- **Restauration** (testée, D06) : base vide → tables → données → index et déclencheurs → contrôles de cohérence. Le basculement vers la base restaurée ne se fait qu’avec ton accord.
+- **Chiffrement** : compression gzip, AES-256-GCM, clé enveloppée par RSA-OAEP 3072 avec ta **clé publique**. La clé privée est créée sur ton ordinateur (`scripts/generate-secrets.mjs`) et n’en sort jamais : ni Cloudflare, ni GitHub, ni le chat ne peuvent relire une copie. Garde-la en deux exemplaires hors ligne : sans elle, les copies sont illisibles.
+- **Cohérence** (corrigé le 25 novembre après la revue de Work) : toutes les tables sont lues en **un seul lot D1**, donc dans le même instant, même pendant une vente. L’image est contrôlée avant d’être scellée : stock égal au registre, réservations et ventes cohérentes, aucune ligne orpheline.
+- **Vérification** : chaque copie est relue après écriture et comparée (empreinte SHA-256 dans l’en-tête). Les anciennes copies ne sont retirées qu’après une copie vérifiée : une copie défectueuse ne remplace jamais une bonne.
+- **Restauration** (testée : D06, R05, R06, U09) : base vide → tables → données par lots → index et déclencheurs → contrôles de cohérence. Le basculement vers la base restaurée ne se fait qu’avec ton accord.
+- **Exercice mensuel** : STUDIO → Santé du site → Sauvegardes chiffrées → Télécharger (Face ID, noté dans l’historique), puis sur ton ordinateur `node scripts/restore-backup.mjs --backup <copie> --key <clé privée>` : la copie est déchiffrée et restaurée dans une base locale jetable, puis contrôlée. Testé de bout en bout dans la recette navigateur.
 - **Exclus** : GitHub (aucune donnée client, même chiffrée) et R2 (demande un moyen de paiement).
-- Une panne de sauvegarde déclenche une alerte critique ; nouvel essai à l’heure suivante.
+- Une panne de sauvegarde déclenche une alerte critique ; nouvel essai à l’heure suivante. Sans copie vérifiée depuis 36 h, l’écran Santé passe en alerte.
 
 ## Sources consultées le 24 novembre 2026
 

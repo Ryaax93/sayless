@@ -64,8 +64,15 @@ export function createStripeClient(env, transport = fetch) {
   return {
     live,
     createCheckoutSession: (params, key) => call('POST', 'checkout/sessions', params, key),
-    // Charge du paiement incluse : son instant de création date le règlement (ventes du lien 1.0).
-    retrieveSession: (sid) => call('GET', `checkout/sessions/${id(sid, 'cs')}?expand%5B%5D=line_items.data.price.product&expand%5B%5D=payment_intent.latest_charge`),
+    // Charge du paiement incluse : son instant date le règlement (ventes du lien 1.0) et sa
+    // transaction de solde donne les frais Stripe réels (Finances).
+    retrieveSession: (sid) => call('GET', `checkout/sessions/${id(sid, 'cs')}?expand%5B%5D=line_items.data.price.product&expand%5B%5D=payment_intent.latest_charge.balance_transaction`),
+    // Ventes du lien 1.0 (synchronisation depuis STUDIO), par pages de 20.
+    listLinkSessions: (link, startingAfter = null) => call('GET', `checkout/sessions?payment_link=${encodeURIComponent(id(link, 'plink'))}&status=complete&limit=20${startingAfter ? `&starting_after=${encodeURIComponent(id(startingAfter, 'cs'))}` : ''}`),
+    // Remboursement décidé par le fondateur (confirmation Face ID) ; jamais automatique.
+    createRefund: (paymentIntent, amount, key) => call('POST', 'refunds', [['payment_intent', id(paymentIntent, 'pi')], ['amount', String(amount)],
+      ['reason', 'requested_by_customer'], ['metadata[source]', 'sayless_studio']], key),
+    retrieveBalance: () => call('GET', 'balance'),
     expireSession: (sid, key) => call('POST', `checkout/sessions/${id(sid, 'cs')}/expire`, [], key),
     retrieveCharge: (cid) => call('GET', `charges/${id(cid, 'ch')}?expand%5B%5D=refunds`),
   };

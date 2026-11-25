@@ -34,3 +34,38 @@ migrations_dir = "../backend/migrations"
 [[kv_namespaces]]
 binding = "BACKUPS"
 id = "00000000000000000000000000000000"
+
+# ---------------------------------------------------------------------------------------------
+# Environnement de TEST isolé (offre gratuite, sans domaine) : `--env test`. Procédure pas à pas :
+# docs/CLOUDFLARE-TEST.md. Les identifiants de base et d'espace sont remplacés à l'étape 2
+# (ce ne sont pas des secrets). Les secrets sont envoyés par `wrangler secret bulk`, jamais ici.
+[env.test]
+name = "sayless-ops-test"
+workers_dev = true
+
+[env.test.assets]
+directory = "../dist-studio"
+run_worker_first = ["/api/*", "/webhooks/*", "/health"]
+
+[env.test.vars]
+ENVIRONMENT = "staging"
+# Adresse de la boutique de test (projet Pages), remplacée à l'étape 6 si le sous-domaine diffère.
+PUBLIC_ORIGIN = "https://sayless-boutique-test.pages.dev"
+# STUDIO_ORIGIN et STUDIO_RP_ID : adresse exacte du Worker de test, remplie à l'étape 4.
+# STUDIO_ORIGIN = "https://sayless-ops-test.<sous-domaine>.workers.dev"
+# STUDIO_RP_ID = "sayless-ops-test.<sous-domaine>.workers.dev"
+VAPID_SUBJECT = "https://saylessbrand.fr"
+# VAPID_PUBLIC_KEY et BACKUP_PUBLIC_KEY : valeurs publiques de public-values.txt (étape 3).
+
+[env.test.triggers]
+crons = ["* * * * *"]
+
+[[env.test.d1_databases]]
+binding = "DB"
+database_name = "sayless-test"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../backend/migrations"
+
+[[env.test.kv_namespaces]]
+binding = "BACKUPS"
+id = "00000000000000000000000000000000"

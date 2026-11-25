@@ -2,10 +2,14 @@
 // Les messages ne contiennent jamais de nom, d'e-mail, de téléphone ni d'adresse : seuls des
 // champs de la liste blanche (numéro, référence, taille, montant, mode de livraison) sont lus.
 import { all, batch, getSettings, one, pad4, sql } from './lib.mjs';
+import { pushReady } from './push.mjs';
 
 const euros = (cents) => `${(cents / 100).toFixed(2).replace('.', ',')} €`;
 
 // Une notification par (kind, ref) ; les canaux externes configurés reçoivent la même entrée.
+// Canaux : ceux configurés ici, plus ceux que le Worker d'exploitation a déclarés dans la base
+// (settings.notify_channels) : une alerte née dans la boutique part aussi sur Discord et l'iPhone
+// sans copier leurs secrets dans le projet de la boutique.
 export function createNotifier(env, deps) {
   return async function notify({ kind, ref, level = 'info', title, body }) {
     const { db } = env;
@@ -13,7 +17,9 @@ export function createNotifier(env, deps) {
     const statements = [sql(db, `INSERT INTO notifications (kind, ref, level, title, body, at) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (kind, ref) DO NOTHING`, kind, ref, level, title, body, now)];
     const payload = JSON.stringify({ kind, level, title, body });
-    for (const channel of deps.channels ?? []) {
+    const declared = String((await one(db, `SELECT value FROM settings WHERE key = 'notify_channels'`).catch(() => null))?.value ?? '')
+      .split(',').filter((c) => ['discord', 'push'].includes(c));
+    for (const channel of new Set([...(deps.channels ?? []), ...declared])) {
       statements.push(sql(db, `INSERT INTO outbox (channel, dedupe, payload, at) VALUES (?, ?, ?, ?)
         ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now));
     }
@@ -24,7 +30,7 @@ export function createNotifier(env, deps) {
 export function configuredChannels(env) {
   const channels = [];
   if (/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(env.DISCORD_WEBHOOK_URL ?? '')) channels.push('discord');
-  if (env.VAPID_PRIVATE_KEY && env.VAPID_PUBLIC_KEY) channels.push('push');
+  if (pushReady(env)) channels.push('push');
   return channels;
 }
 
@@ -59,19 +65,22 @@ export async function afterSale(env, orderId, deps, { announce = true } = {}) {
       FROM products p JOIN variants v ON v.product_id = p.id JOIN inventory i ON i.sku = v.sku
       WHERE p.drop_id = ? AND p.status = 'published'`, dropId);
     if (row.n > 0 && row.unconfirmed === 0 && row.left_ === 0) {
+      const drop = await one(db, 'SELECT name FROM drops WHERE id = ?', dropId);
       await deps.notify({ kind: 'drop_sold_out', ref: dropId, level: 'info',
-        title: 'DROP 01 — SOLD OUT', body: 'Toutes les pièces sont vendues. Le message de fin de drop peut s’afficher.' });
+        title: `${(drop?.name ?? dropId).toUpperCase()} — SOLD OUT`, body: 'Toutes les pièces sont vendues. Le message de fin de drop peut s’afficher.' });
     }
   }
 }
 
 // Envoi au moins une fois, sans doublon : réservation de la ligne (bail de 2 min), essais
 // espacés, ligne « morte » et alerte technique après 5 échecs.
-export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit = 25 } = {}) {
+// `only` : envoyer tout de suite une entrée précise (accusé de réception), sans attendre la tâche.
+export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit = 25, only = null } = {}) {
   const { db } = env;
   const now = deps.now();
-  const rows = await all(db, `SELECT id, channel, payload FROM outbox
-    WHERE status IN ('pending', 'sending') AND next_at <= ? ORDER BY id LIMIT ?`, now, limit);
+  const rows = await all(db, `SELECT id, channel, dedupe, payload FROM outbox
+    WHERE status IN ('pending', 'sending') AND next_at <= ? ${only ? 'AND dedupe = ?' : ''} ORDER BY id LIMIT ?`,
+  ...(only ? [now, only, limit] : [now, limit]));
   let sent = 0;
   for (const row of rows) {
     const claim = await batch(db, [sql(db, `UPDATE outbox SET status = 'sending', attempts = attempts + 1, next_at = ?
@@ -80,7 +89,8 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
     const send = senders[row.channel];
     try {
       if (!send) throw new Error('canal non configuré');
-      await send(JSON.parse(row.payload));
+      // E-mails : contenu chiffré, ouvert par l'expéditeur seulement au moment de l'envoi.
+      await send(row.channel === 'email' ? row.payload : JSON.parse(row.payload), row);
       await batch(db, [sql(db, `UPDATE outbox SET status = 'sent' WHERE id = ?`, row.id)]);
       sent += 1;
     } catch {
@@ -139,8 +149,15 @@ export async function maybeDailyReport(env, deps) {
     FROM variants v JOIN inventory i ON i.sku = v.sku JOIN products p ON p.id = v.product_id
     WHERE p.status = 'published' ORDER BY v.position`);
   const open = await one(db, `SELECT COUNT(*) AS n FROM notifications WHERE level = 'critical' AND resolved_at IS NULL`);
+  const review = await one(db, `SELECT COUNT(*) AS n FROM orders WHERE status IN ('review', 'paid_no_stock')`);
+  const dead = await one(db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead'`);
+  const requests = await one(db, `SELECT COUNT(*) AS n FROM customer_requests WHERE status = 'received'`);
   const stockText = stock.map((s) => (s.confirmed_at === null ? `${s.size} à confirmer` : `${s.size} ${s.available}${s.reserved ? ` (+${s.reserved} réservée)` : ''}`)).join(' · ');
+  const backup = Number(settings.backup_last_verified_at || 0);
+  const health = [settings.backup_last_error ? 'sauvegarde en échec' : backup ? `sauvegarde vérifiée le ${parisClock(backup).date}` : 'sauvegarde non configurée',
+    dead.n ? `${dead.n} message(s) non distribué(s)` : null].filter(Boolean).join(', ');
   await deps.notify({ kind: 'daily_report', ref: clock.date, level: 'info', title: `Rapport du ${clock.date}`,
-    body: `24 h : ${sales.n} vente(s), ${euros(sales.cents)} encaissés (frais Stripe non déduits). À préparer : ${toPrepare.n}. Stock : ${stockText || 'aucun'}. Alertes ouvertes : ${open.n}.` });
+    body: `24 h : ${sales.n} vente(s), ${euros(sales.cents)} encaissés (frais Stripe non déduits). À préparer : ${toPrepare.n}. À vérifier : ${review.n}. `
+      + `Demandes à traiter : ${requests.n}. Stock : ${stockText || 'aucun'}. Alertes ouvertes : ${open.n}. Santé : ${health}.` });
   return clock.date;
 }
