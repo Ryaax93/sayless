@@ -8,7 +8,8 @@ const out = new URL('dist-studio/', root);
 await rm(out, { recursive: true, force: true });
 await mkdir(new URL('assets/', out), { recursive: true });
 await cp(new URL('studio/', root), out, { recursive: true });
-for (const file of ['display.ttf', 'body.ttf', 'body-semibold.ttf', 'logo.webp', 'FONT-LICENSE.txt', 'LICENSE-APACHE-2.0.txt']) {
+await rm(new URL('README.md', out), { force: true }); // notes internes : jamais servies
+for (const file of ['display.ttf', 'body.ttf', 'body-semibold.ttf', 'logo.webp', 'hoodie-front.webp', 'FONT-LICENSE.txt', 'LICENSE-APACHE-2.0.txt']) {
   await cp(new URL(`public/store/assets/${file}`, root), new URL(`assets/${file}`, out));
 }
 const hash = createHash('sha256');

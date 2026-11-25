@@ -26,7 +26,8 @@ const REVIEW_TEXT = {
   contact_not_sealed: 'Coordonnées non enregistrées (clé de chiffrement absente) : adresse à relire dans Stripe',
   payment_mismatch: 'Paiement différent de la commande (montant, devise ou lignes)',
 };
-const reviewText = (o) => (o.review_reason ? (REVIEW_TEXT[o.review_reason] ?? legacyReviewText(o.review_reason)) : (o.status === 'paid_no_stock'
+const capital = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+const reviewText = (o) => capital(o.review_reason ? (REVIEW_TEXT[o.review_reason] ?? legacyReviewText(o.review_reason)) : (o.status === 'paid_no_stock'
   ? 'Payée alors qu’aucune pièce n’était libre' : o.status === 'review' ? 'Paiement à vérifier' : null));
 
 function stage(o) {
@@ -87,7 +88,11 @@ async function orderDetail(ctx, id) {
       fulfil: ['paid', 'partially_refunded'].includes(o.status),
       refund: ['paid', 'paid_no_stock', 'review', 'partially_refunded'].includes(o.status) && Boolean(o.stripe_payment_intent)
         && o.amount_refunded_cents < o.total_cents,
-      return_check: ['paid', 'refunded', 'partially_refunded'].includes(o.status) && items.some((i) => i.sku),
+      // Contrôle d'un retour : seulement pour un colis parti (ou revenu), jamais avant l'expédition.
+      // Annulation remboursée avant envoi : la pièce, jamais partie, peut aussi être remise en stock après contrôle.
+      return_check: ['paid', 'refunded', 'partially_refunded'].includes(o.status) && items.some((i) => i.sku)
+        && Boolean(o.shipped_at || o.returned_at || ['in_transit', 'available_at_relay', 'delivered', 'returned'].includes(o.tracking)
+          || ['refunded', 'partially_refunded'].includes(o.status)),
     } };
 }
 
