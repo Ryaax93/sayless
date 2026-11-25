@@ -16,7 +16,7 @@
     "build:storefront": "node scripts/build-storefront.mjs",
     "test:frontend": "node --test tests/api-client.test.mjs tests/stock-display.test.mjs tests/portable.test.mjs && node tests/commerce.test.cjs",
     "test:inventory": "node --test tests/inventory.test.mjs",
-    "test:backend": "node --test tests/backend/scenarios.test.mjs tests/backend/parity.test.mjs tests/backend/decisions.test.mjs tests/backend/studio.test.mjs",
+    "test:backend": "node --test tests/backend/scenarios.test.mjs tests/backend/parity.test.mjs tests/backend/decisions.test.mjs tests/backend/studio.test.mjs tests/backend/corrections.test.mjs",
     "check:cloudflare": "npm run build:studio && wrangler deploy --dry-run --outdir .wrangler/check-ops -c ops/wrangler.toml && wrangler pages functions build --outdir .wrangler/check-pages",
     "test": "npm run test:frontend && npm run test:inventory && npm run test:backend",
     "dev:legacy": "node scripts/run-framework.mjs dev",

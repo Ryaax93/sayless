@@ -8,8 +8,13 @@ import { Miniflare } from 'miniflare';
 import { handleOps, handlePublicApi, createContext } from '../../backend/src/routes.mjs';
 import { StripeError } from '../../backend/src/stripe.mjs';
 import { recordInventory } from '../../backend/src/stock.mjs';
+import { publishTerms } from '../../backend/src/terms.mjs';
 
-const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql'];
+const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql',
+  '0005_revue_work.sql'];
+// Texte de CGV de TEST uniquement (jamais publié) : sert à vérifier la version signée dans le devis.
+export const TEST_TERMS = { version: '2026-11', body: `CGV DE TEST — document fictif utilisé par les essais automatiques. ${'Clause de test. '.repeat(20)}` };
+export const TEST_LINK = { id: 'plink_test', price: 'price_test_lien' };
 const WITHOUT_CATALOG = MIGRATIONS.filter((m) => m !== '0002_catalog_drop01.sql');
 export const T0 = 1_800_000_000; // horloge simulée (secondes)
 export const ORIGIN = 'https://boutique.test';
@@ -25,6 +30,19 @@ export async function startDatabases() {
     kvNamespaces: ['BACKUPS'], compatibilityDate: '2026-05-15' });
 }
 export const stopDatabases = () => mf?.dispose();
+// KV en mémoire pour les sauvegardes : `corrupt` simule une écriture altérée par le stockage.
+export function createKV() {
+  const store = new Map();
+  return {
+    corrupt: false,
+    async put(name, value, { metadata } = {}) { store.set(name, { value: this.corrupt ? `${value.slice(0, -8)}AAAAAAAA` : value, metadata }); },
+    async get(name) { return store.get(name)?.value ?? null; },
+    async delete(name) { store.delete(name); },
+    async list({ prefix = '' } = {}) {
+      return { keys: [...store.keys()].filter((k) => k.startsWith(prefix)).sort().map((name) => ({ name, metadata: store.get(name).metadata })), list_complete: true };
+    },
+  };
+}
 export const backupStore = () => mf.getKVNamespace('BACKUPS');
 
 export async function migrate(db, files = WITHOUT_CATALOG) {
@@ -83,8 +101,8 @@ export class FakeStripe {
   view(sid) {
     const s = this.sessions.get(sid);
     return structuredClone({ ...s, line_items: { has_more: false, data: s.lines.map((l) => ({ quantity: l.quantity,
-      price: { unit_amount: l.unit, currency: 'eur', product: { metadata: { sku: l.sku } } } })) },
-    payment_intent: s.pi ? { id: s.pi.id, status: s.pi.status } : null });
+      price: { id: l.price ?? null, unit_amount: l.unit, currency: l.currency ?? 'eur', product: { metadata: l.sku ? { sku: l.sku } : {} } } })) },
+    payment_intent: s.pi ? { id: s.pi.id, status: s.pi.status, latest_charge: s.pi.charge ?? null } : null });
   }
   async createCheckoutSession(params, key) {
     if (this.down) throw new StripeError('network');
@@ -137,7 +155,7 @@ export class FakeStripe {
     s.customer_details = { name: customer.name, email: customer.email, phone: customer.phone };
     if (s.params?.['shipping_address_collection[allowed_countries][0]']) s.shipping_details = { name: customer.name, address: customer.address };
     if (s.params?.['custom_fields[0][key]'] === 'recipient_name') s.custom_fields = [{ key: 'recipient_name', type: 'text', text: { value: customer.name } }];
-    s.pi = { id: rid('pi'), status: method === 'card' ? 'succeeded' : 'processing' };
+    s.pi = { id: rid('pi'), status: method === 'card' ? 'succeeded' : 'processing', charge: { id: rid('ch'), created: this.clock.now() } };
     s.payment_status = method === 'card' ? 'paid' : 'unpaid';
   }
   asyncResult(sid, ok) {
@@ -145,12 +163,16 @@ export class FakeStripe {
     s.pi.status = ok ? 'succeeded' : 'requires_payment_method';
     s.payment_status = ok ? 'paid' : 'unpaid';
   }
-  linkSession(size, amount = 7500, customer = PII) {
+  // Vente par le lien 1.0 (réglée à l'instant de l'horloge simulée, ou à `settledAt`).
+  linkSession(size, amount = 7500, customer = PII, { link = TEST_LINK.id, price = TEST_LINK.price, quantity = 1, currency = 'eur',
+    settledAt = this.clock.now(), lines = null } = {}) {
     const sid = rid('cs_live_lien');
     this.sessions.set(sid, { id: sid, object: 'checkout.session', livemode: false, status: 'complete', payment_status: 'paid',
-      payment_link: 'plink_test', amount_total: amount, amount_subtotal: amount, currency: 'eur', created: this.clock.now(),
-      custom_fields: [{ key: 'choisistataille', dropdown: { value: size } }], lines: [], metadata: {},
-      pi: { id: rid('pi'), status: 'succeeded' }, customer_details: { name: customer.name, email: customer.email, phone: customer.phone } });
+      payment_link: link, amount_total: amount * quantity, amount_subtotal: amount * quantity, currency, created: this.clock.now(),
+      custom_fields: [{ key: 'choisistataille', dropdown: { value: size } }], metadata: {},
+      lines: lines ?? [{ quantity, unit: amount, price, currency, sku: null }],
+      pi: { id: rid('pi'), status: 'succeeded', charge: settledAt === null ? null : { id: rid('ch'), created: settledAt } },
+      customer_details: { name: customer.name, email: customer.email, phone: customer.phone } });
     return sid;
   }
   refund(sid, amount) {
@@ -184,13 +206,16 @@ export class FakeCarrier {
 }
 // Points relais simulés : un à Paris, un en Corse (hors zone), un fermé. Aucun point réel.
 const RELAYS = {
-  'TEST-RELAY-1': { postcode: '75016', city: 'Paris' },
-  'TEST-RELAY-CORSE': { postcode: '20000', city: 'Ajaccio' },
-  'TEST-RELAY-CLOSED': { postcode: '69001', city: 'Lyon', open: false },
+  'TEST-RELAY-1': { postcode: '75016', city: 'Paris', line1: '1 rue du Relais Test' },
+  'TEST-RELAY-CORSE': { postcode: '20000', city: 'Ajaccio', line1: '2 rue du Relais Test' },
+  'TEST-RELAY-CLOSED': { postcode: '69001', city: 'Lyon', line1: '3 rue du Relais Test', open: false },
 };
 export const fakeRelays = {
   async find(id) { return RELAYS[id] ? { id, name: 'Relais Test', network: 'TEST', country: 'FR', open: true, ...RELAYS[id] } : null; },
-  async search() { return [{ id: 'TEST-RELAY-1', name: 'Relais Test', network: 'TEST', ...RELAYS['TEST-RELAY-1'] }]; },
+  // Le fournisseur simulé renvoie aussi un point corse proche et un point fermé : le serveur les écarte.
+  async search() {
+    return ['TEST-RELAY-1', 'TEST-RELAY-CORSE', 'TEST-RELAY-CLOSED'].map((id) => ({ id, name: 'Relais Test', network: 'TEST', country: 'FR', ...RELAYS[id] }));
+  },
 };
 
 export const sign = (raw, t, secret) => `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex')}`;
@@ -226,6 +251,9 @@ export async function bench(stocks = { 'TEST-M': 1 }, { mode = 'open', productSt
     const counted = Object.fromEntries(Object.entries(stocks).filter(([, q]) => q !== null));
     if (Object.keys(counted).length) await recordInventory(real, { counts: counted, actor: 'test', note: 'fixture', now: T0 });
   }
+  await publishTerms(real, { ...TEST_TERMS, actor: 'test', now: T0 });
+  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'legacy_payment_link_id'`).bind(TEST_LINK.id).run();
+  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'legacy_link_price_id'`).bind(TEST_LINK.price).run();
   await real.prepare(`UPDATE settings SET value = ? WHERE key = 'shop_mode'`).bind(mode).run();
   await real.prepare(`UPDATE settings SET value = ? WHERE key = 'payments_enabled'`).bind(payments ? '1' : '0').run();
   await real.prepare(`UPDATE settings SET value = ? WHERE key = 'low_stock_threshold'`).bind(String(threshold)).run();

@@ -166,9 +166,11 @@ function importKey(jwk, alg) {
 
 // Connexion : signature sur authenticatorData || SHA-256(clientDataJSON). Compteur : s'il est
 // utilisé, il doit augmenter (une valeur qui recule signale une clé clonée). 0/0 = passkey synchronisée.
-export async function verifyAssertion({ response, expectedChallenge, origin, rpId, credential, requireUV = true }) {
+export async function verifyAssertion({ response, expectedChallenge, origin, rpId, credential, requireUV = true, userHandle = null }) {
   const r = response?.response ?? {};
   if (response?.type !== 'public-key' || response.id !== credential.id) refuse('credential_id');
+  // Passkey découvrable : si l'authentificateur renvoie l'identifiant d'utilisateur, il doit être le nôtre.
+  if (r.userHandle !== null && r.userHandle !== undefined && r.userHandle !== '' && userHandle !== null && r.userHandle !== userHandle) refuse('user_handle');
   const clientDataJSON = bytesOf(r.clientDataJSON, 'client_data');
   checkClientData(clientDataJSON, 'webauthn.get', expectedChallenge, origin);
   const authData = bytesOf(r.authenticatorData, 'authdata');

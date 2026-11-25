@@ -4,11 +4,12 @@
 import { fail } from './lib.mjs';
 
 export class StripeError extends Error {
-  constructor(kind, status = 0, type = null) {
+  constructor(kind, status = 0, type = null, param = null) {
     super(`stripe_${kind}${status ? `_${status}` : ''}`);
     this.kind = kind; // network | api | mode_mismatch
     this.status = status;
     this.type = type;
+    this.param = param;
   }
   // Réponse explicite de Stripe : la requête n'a créé aucun objet. Une erreur d'idempotence
   // (clé déjà utilisée avec d'autres paramètres), un 409 ou un 429 restent incertains.
@@ -52,7 +53,7 @@ export function createStripeClient(env, transport = fetch) {
     } catch {
       throw new StripeError(response.ok ? 'network' : 'api', response.status);
     }
-    if (!response.ok) throw new StripeError('api', response.status, data?.error?.type ?? null);
+    if (!response.ok) throw new StripeError('api', response.status, data?.error?.type ?? null, data?.error?.param ?? null);
     if (typeof data.livemode === 'boolean' && data.livemode !== live) throw new StripeError('mode_mismatch');
     return data;
   }
@@ -63,7 +64,8 @@ export function createStripeClient(env, transport = fetch) {
   return {
     live,
     createCheckoutSession: (params, key) => call('POST', 'checkout/sessions', params, key),
-    retrieveSession: (sid) => call('GET', `checkout/sessions/${id(sid, 'cs')}?expand%5B%5D=line_items.data.price.product&expand%5B%5D=payment_intent`),
+    // Charge du paiement incluse : son instant de création date le règlement (ventes du lien 1.0).
+    retrieveSession: (sid) => call('GET', `checkout/sessions/${id(sid, 'cs')}?expand%5B%5D=line_items.data.price.product&expand%5B%5D=payment_intent.latest_charge`),
     expireSession: (sid, key) => call('POST', `checkout/sessions/${id(sid, 'cs')}/expire`, [], key),
     retrieveCharge: (cid) => call('GET', `charges/${id(cid, 'ch')}?expand%5B%5D=refunds`),
   };

@@ -3,7 +3,7 @@
 // et import des ventes passées. Un remboursement ne remet jamais une pièce en stock.
 import { all, audit, batch, fail, getSettings, newReference, one, sql, uuid } from './lib.mjs';
 import { sealContact } from './security.mjs';
-import { assertZone, orderItems, releaseStatements } from './commerce.mjs';
+import { assertZone, orderItems, releaseStatements, validSession } from './commerce.mjs';
 import { sessionParams, verifyStripeSignature } from './stripe.mjs';
 import { afterSale } from './notify.mjs';
 
@@ -22,7 +22,7 @@ export async function handleStripeWebhook(env, raw, signature, deps) {
   const object = event.data?.object ?? {};
   if (SESSION_EVENTS.has(event.type)) {
     const session = await deps.stripe.retrieveSession(object.id); // l'état réel fait foi, jamais l'événement
-    if (session.payment_link) await recordLegacyLinkSale(env, session, deps);
+    if (session.payment_link) await recordLegacyLinkSale(env, session, deps, { eventCreated: Number.isSafeInteger(event.created) ? event.created : null });
     else await reconcileSession(env, session, deps);
   } else if (event.type === 'charge.refunded') {
     await recordRefunds(env, await deps.stripe.retrieveCharge(object.id), deps);
@@ -123,12 +123,15 @@ async function outOfZone(db, order, contact) {
 }
 
 // Vente confirmée : réservations converties (ou pièce reprise si encore libre), numéro attribué.
+// Commande non expédiable en l'état (adresse hors zone, coordonnées non chiffrées) : « à vérifier »,
+// pièce gardée pour elle, aucune étiquette ni remboursement automatique.
 async function confirmSale(env, order, session, deps) {
   const { db } = env;
   const now = deps.now();
   const contact = contactFrom(session);
-  const sealed = await sealContact(env, contact);
+  const sealed = await sealContact(env, contact, order.id);
   const zoneProblem = await outOfZone(db, order, contact);
+  const reviewReason = zoneProblem ? 'address_out_of_zone' : !sealed ? 'contact_not_sealed' : null;
   // Les pièces ne sont attribuées qu'une fois, tant que la commande n'est pas déjà tranchée :
   // un renvoi d'événement après une remise en stock ne décompte jamais une seconde fois.
   const open = `(SELECT status FROM orders WHERE id = ?) IN ('pending', 'awaiting_payment', 'expired', 'failed')`;
@@ -151,71 +154,128 @@ async function confirmSale(env, order, session, deps) {
       WHERE id = ? AND number IS NULL AND paid_at IS NOT NULL`, order.id),
     sql(db, `INSERT INTO order_contacts (order_id, sealed, created_at) SELECT ?, ?, ? WHERE ? IS NOT NULL
       ON CONFLICT (order_id) DO NOTHING`, order.id, sealed, now, sealed),
-    sql(db, `UPDATE orders SET status = 'review', updated_at = ? WHERE id = ? AND status = 'paid' AND ? = 1
-      AND paid_at = ?`, now, order.id, zoneProblem ? 1 : 0, now),
+    sql(db, `UPDATE orders SET review_reason = COALESCE(review_reason, ?), updated_at = ?
+      WHERE id = ? AND paid_at = ? AND ? IS NOT NULL`, reviewReason, now, order.id, now, reviewReason),
+    sql(db, `UPDATE orders SET status = 'review', updated_at = ? WHERE id = ? AND status = 'paid' AND ? IS NOT NULL
+      AND paid_at = ?`, now, order.id, reviewReason, now),
   ]);
-  const after = await one(db, 'SELECT status FROM orders WHERE id = ?', order.id);
-  if (zoneProblem && after.status === 'review') {
+  const after = await one(db, 'SELECT status, paid_at FROM orders WHERE id = ?', order.id);
+  const justPaid = after.paid_at === now;
+  if (justPaid && reviewReason === 'address_out_of_zone') {
     await deps.notify({ kind: 'address_out_of_zone', ref: order.id, level: 'critical', title: 'Adresse hors zone livrée',
       body: `Commande ${order.reference} payée avec une adresse hors zone. Pièce réservée à cette commande ; décision manuelle, aucun remboursement automatique.` });
-    await afterSale(env, order.id, deps, { announce: false });
-    return { status: after.status };
-  }
-  if (!sealed) {
-    await deps.notify({ kind: 'technical', ref: 'pii_key_missing', level: 'critical',
-      title: 'Clé de chiffrement absente', body: 'Les coordonnées de livraison ne sont pas enregistrées : consulte-les dans Stripe.' });
+  } else if (justPaid && reviewReason === 'contact_not_sealed') {
+    await deps.notify({ kind: 'contact_not_sealed', ref: order.id, level: 'critical', title: 'Coordonnées non enregistrées',
+      body: `Commande ${order.reference} : la clé de chiffrement est absente ou invalide. Commande à vérifier avant expédition (adresse visible dans Stripe).` });
   }
   if (after.status === 'paid_no_stock') {
     await deps.notify({ kind: 'paid_without_stock', ref: order.id, level: 'critical',
       title: 'Commande payée sans pièce disponible', body: `Commande ${order.reference} : décision manuelle (aucun remboursement automatique).` });
   } else if (after.status === 'paid') {
     await afterSale(env, order.id, deps);
+  } else if (after.status === 'review' && justPaid) {
+    await afterSale(env, order.id, deps, { announce: false });
   }
   return { status: after.status };
 }
 
 // Filet de sécurité : vente arrivée par l'ancien lien de paiement 1.0 sur le même compte Stripe.
-// Avant l'inventaire confirmé de la taille : historique sans effet sur le stock (le comptage la
-// reflète). Après : décomptée une fois, ou signalée si plus aucune pièce n'est libre.
-export async function recordLegacyLinkSale(env, session, deps) {
+// Reconnue seulement si le lien ET le prix sont ceux enregistrés dans STUDIO, avec une seule ligne,
+// une quantité de 1, le prix du catalogue et l'euro. Sinon : « à vérifier », sans taille supposée.
+// Imputation selon l'instant réel du règlement (création de la charge Stripe) et l'inventaire :
+//  - inventaire de la taille non confirmé : historique sans effet (le comptage la reflète) ;
+//  - réglée après l'inventaire : décomptée une fois (« payée sans pièce » si plus rien n'est libre) ;
+//  - réglée plus de 24 h avant l'inventaire : déjà reflétée par le comptage ;
+//  - réglée dans les 24 h qui précèdent l'inventaire, ou instant inconnu : pièce retirée par
+//    prudence et commande « à vérifier » (le fondateur indique si elle était déjà mise de côté).
+// Une même session n'est jamais enregistrée deux fois (session Stripe unique en base).
+const LEGACY_REVIEW_TEXT = {
+  unknown_link: 'lien de paiement non reconnu', link_not_configured: 'lien 1.0 non enregistré dans STUDIO',
+  lines: 'lignes de paiement inattendues', size: 'taille non reconnue', quantity: 'quantité différente de 1',
+  price: 'prix différent du catalogue', currency: 'devise autre que l’euro',
+  settled_near_inventory: 'réglée peu avant l’inventaire : pièce retirée par prudence',
+  settlement_unknown: 'instant du règlement inconnu : pièce retirée par prudence',
+};
+export const legacyReviewText = (reason) => String(reason ?? '').split(',').filter(Boolean)
+  .map((r) => LEGACY_REVIEW_TEXT[r] ?? r).join(' ; ');
+
+export async function recordLegacyLinkSale(env, session, deps, { eventCreated = null } = {}) {
   const { db } = env;
   const now = deps.now();
   if (!(session.status === 'complete' && session.payment_status === 'paid')) return { status: 'ignored' };
   if (await one(db, 'SELECT id FROM orders WHERE stripe_session_id = ?', session.id)) return { status: 'duplicate' };
   const settings = await getSettings(db);
+  const problems = new Set();
+  if (!settings.legacy_payment_link_id || !settings.legacy_link_price_id) problems.add('link_not_configured');
+  else if (session.payment_link !== settings.legacy_payment_link_id) problems.add('unknown_link');
+  const lines = session.line_items?.data;
+  const line = Array.isArray(lines) && lines.length === 1 && !session.line_items?.has_more ? lines[0] : null;
   const field = (session.custom_fields ?? []).find((f) => f.key === settings.legacy_link_size_field);
   const value = String(field?.dropdown?.value ?? '').trim().toLowerCase();
   const map = value ? await one(db, `SELECT l.sku, v.product_id, p.price_cents, i.confirmed_at FROM legacy_link_sizes l
       JOIN variants v ON v.sku = l.sku JOIN products p ON p.id = v.product_id JOIN inventory i ON i.sku = l.sku
       WHERE l.value = ?`, value) : null;
+  if (!map) problems.add('size');
+  if (!line) problems.add('lines');
+  else {
+    if (line.quantity !== 1) problems.add('quantity');
+    if (settings.legacy_link_price_id && line.price?.id !== settings.legacy_link_price_id) problems.add('price');
+    if (map && line.price?.unit_amount !== map.price_cents) problems.add('price');
+    if (String(line.price?.currency ?? '').toLowerCase() !== 'eur') problems.add('currency');
+  }
+  if (String(session.currency ?? '').toLowerCase() !== 'eur') problems.add('currency');
+
+  // Instant du règlement : création de la charge réussie (Stripe). Borne haute : l'événement signé.
+  const charge = typeof session.payment_intent === 'object' ? session.payment_intent?.latest_charge : null;
+  const settledAt = Number.isSafeInteger(charge?.created) ? charge.created : null;
+  const window = Number(settings.legacy_review_window_seconds || 86400);
+  let treatment = 'none';
+  if (map) {
+    const count = map.confirmed_at;
+    if (count === null) treatment = 'history';
+    else if ((Number.isSafeInteger(session.created) && session.created >= count) || (settledAt !== null && settledAt >= count)) treatment = 'count';
+    else if ((settledAt ?? eventCreated) !== null && (settledAt ?? eventCreated) < count - window) treatment = 'history';
+    else {
+      treatment = 'hold';
+      problems.add(settledAt === null ? 'settlement_unknown' : 'settled_near_inventory');
+    }
+    // Non conforme mais vendue après l'inventaire : la pièce est retirée, la commande reste à vérifier.
+    if (treatment === 'count' && problems.size) treatment = 'hold';
+  }
+  const reason = [...problems].join(',') || null;
   const id = uuid();
   const reference = newReference();
-  const paidAt = Number.isFinite(session.created) ? session.created : now;
-  const counted = map && map.confirmed_at !== null && paidAt >= map.confirmed_at;
+  const paidAt = settledAt ?? (Number.isSafeInteger(eventCreated) ? eventCreated : now);
   const ref = `link:${session.id}`;
   const statements = [];
-  if (map) {
-    statements.push(counted
-      ? sql(db, `INSERT INTO stock_movements (sku, d_on_hand, d_reserved, reason, ref, at)
-          SELECT ?, -1, 0, 'legacy_link_sale', ?, ? WHERE (SELECT on_hand - reserved FROM inventory WHERE sku = ?) >= 1`,
-      map.sku, ref, now, map.sku)
-      : sql(db, `INSERT INTO stock_movements (sku, d_on_hand, d_reserved, reason, ref, at)
-          VALUES (?, 0, 0, 'imported_sale', ?, ?)`, map.sku, ref, now));
+  // Quantité payée (1 attendue) : autant de pièces retirées, seulement si elles sont libres.
+  const qty = Number.isSafeInteger(line?.quantity) && line.quantity >= 1 && line.quantity <= 10 ? line.quantity : 1;
+  if (treatment === 'count' || treatment === 'hold') {
+    statements.push(sql(db, `INSERT INTO stock_movements (sku, d_on_hand, d_reserved, reason, ref, note, at)
+        SELECT ?, ?, 0, 'legacy_link_sale', ?, ?, ? WHERE (SELECT on_hand - reserved FROM inventory WHERE sku = ?) >= ?`,
+    map.sku, -qty, ref, treatment === 'hold' ? 'Vente 1.0 à vérifier : pièce retirée par prudence' : 'Vente 1.0 après inventaire', now, map.sku, qty));
+  } else if (treatment === 'history') {
+    statements.push(sql(db, `INSERT INTO stock_movements (sku, d_on_hand, d_reserved, reason, ref, note, at)
+        VALUES (?, 0, 0, 'imported_sale', ?, 'Vente 1.0 reflétée par l’inventaire', ?)`, map.sku, ref, now));
   }
-  statements.push(sql(db, `INSERT INTO orders (id, reference, source, status, subtotal_cents, shipping_cents, total_cents,
+  const withStock = treatment === 'count' || treatment === 'hold';
+  statements.push(sql(db, `INSERT INTO orders (id, reference, source, status, review_reason, subtotal_cents, shipping_cents, total_cents,
       currency, stripe_session_id, stripe_payment_intent, customer_name, created_at, paid_at, updated_at)
-    VALUES (?, ?, 'legacy_link', CASE WHEN ? = 0 THEN 'review'
-        WHEN EXISTS (SELECT 1 FROM stock_movements WHERE ref = ?) THEN 'paid' ELSE 'paid_no_stock' END,
-      ?, ?, ?, 'eur', ?, ?, ?, ?, ?, ?)`,
-  id, reference, map ? 1 : 0, ref, session.amount_subtotal ?? session.amount_total ?? 0, session.total_details?.amount_shipping ?? 0,
-  session.amount_total ?? 0, session.id, paymentIntentId(session), session.customer_details?.name ?? null, now, paidAt, now));
+    VALUES (?, ?, 'legacy_link', CASE
+        WHEN ? = 1 AND NOT EXISTS (SELECT 1 FROM stock_movements WHERE ref = ?) THEN 'paid_no_stock'
+        WHEN ? IS NOT NULL THEN 'review' ELSE 'paid' END,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  id, reference, withStock ? 1 : 0, ref, reason, reason, Math.max(session.amount_subtotal ?? session.amount_total ?? 0, 0),
+  Math.max(session.total_details?.amount_shipping ?? 0, 0), Math.max(session.amount_total ?? 0, 0), String(session.currency ?? 'eur').toLowerCase(),
+  session.id, paymentIntentId(session), session.customer_details?.name ?? null, now, paidAt, now));
   statements.push(sql(db, `INSERT INTO order_items (order_id, line, product_id, sku, quantity, unit_price_cents)
-    SELECT ?, 1, COALESCE(?, ${LEGACY_PRODUCT}), ?, 1, ?`, id, map?.product_id, map?.sku,
-  map?.price_cents ?? session.amount_subtotal ?? 0));
+    SELECT ?, 1, COALESCE(?, ${LEGACY_PRODUCT}), ?, ?, ?`, id, map?.product_id, map?.sku,
+  qty, Math.max(line?.price?.unit_amount ?? map?.price_cents ?? session.amount_subtotal ?? 0, 0)));
   statements.push(sql(db, `UPDATE orders SET number = (SELECT COALESCE(MAX(number), 0) + 1 FROM orders)
     WHERE id = ? AND number IS NULL`, id));
-  const sealed = await sealContact(env, contactFrom(session));
+  const sealed = await sealContact(env, contactFrom(session), id);
   if (sealed) statements.push(sql(db, 'INSERT INTO order_contacts (order_id, sealed, created_at) VALUES (?, ?, ?)', id, sealed, now));
+  statements.push(audit(db, now, 'stripe', 'legacy_link_sale', reference, `${treatment}${reason ? `:${reason}` : ''}`));
   try {
     await batch(db, statements);
   } catch (error) {
@@ -225,17 +285,17 @@ export async function recordLegacyLinkSale(env, session, deps) {
   const order = await one(db, 'SELECT status, reference FROM orders WHERE id = ?', id);
   if (order.status === 'paid_no_stock') {
     await deps.notify({ kind: 'legacy_link_without_stock', ref: session.id, level: 'critical',
-      title: 'Vente 1.0 sans pièce libre', body: `Commande ${order.reference} : décision manuelle nécessaire.` });
+      title: 'Vente 1.0 sans pièce libre', body: `Commande ${order.reference} : décision manuelle nécessaire.${reason ? ` À vérifier aussi : ${legacyReviewText(reason)}.` : ''}` });
   } else if (order.status === 'review') {
-    await deps.notify({ kind: 'legacy_link_unknown_size', ref: session.id, level: 'critical',
-      title: 'Vente 1.0 sans taille reconnue', body: `Commande ${order.reference} : taille à confirmer avant préparation.` });
-  } else if (counted) {
+    await deps.notify({ kind: 'legacy_link_review', ref: session.id, level: 'critical',
+      title: 'Vente 1.0 à vérifier', body: `Commande ${order.reference} : ${legacyReviewText(reason)}. À valider dans STUDIO avant préparation.` });
+  } else if (treatment === 'count') {
     await afterSale(env, id, deps);
   } else {
     await deps.notify({ kind: 'legacy_link_sale', ref: session.id, level: 'info',
       title: 'Vente 1.0 enregistrée', body: `Commande ${order.reference} : antérieure à l'inventaire, sans effet sur le stock.` });
   }
-  return { status: order.status };
+  return { status: order.status, treatment };
 }
 
 // Remboursements : enregistrés et rapprochés de la commande. Jamais de remise en stock ici.
@@ -264,30 +324,53 @@ export async function recordRefunds(env, charge, deps) {
   return { status: 'recorded' };
 }
 
-// Balayage (chaque minute) : sessions expirées ou incertaines. On ferme d'abord la session chez
-// Stripe, on relit son état, puis on vend ou on libère. Stripe muet : la pièce reste gardée.
+// Balayage (chaque minute) : sessions expirées ou incertaines.
+//  - Session incertaine pendant la réservation : retrouvée par sa clé et CONSERVÉE (le client qui
+//    réessaie avec la même clé reçoit la même session) ; jamais de seconde session.
+//  - Réservation échue : on ferme d'abord la session chez Stripe, on relit son état, puis on vend
+//    ou on libère. Stripe muet : la pièce reste gardée.
 export async function sweep(env, deps, limit = 20) {
   const { db } = env;
   const now = deps.now();
-  if (!deps.stripe) return { released: 0, checked: 0 };
+  if (!deps.stripe) return { released: 0, checked: 0, recovered: 0 };
   const rows = await all(db, `SELECT * FROM orders WHERE status = 'pending' AND (expires_at <= ? OR needs_stripe_check = 1)
     ORDER BY created_at LIMIT ?`, now, limit);
   let released = 0;
+  let recovered = 0;
   for (const order of rows) {
     try {
+      const running = order.expires_at > now;
       let sid = order.stripe_session_id;
       if (!sid) {
+        let found;
         try {
           const items = await orderItems(db, order.id);
-          const s = await deps.stripe.createCheckoutSession(sessionParams(order, items, env.PUBLIC_ORIGIN), `sayless-checkout-${order.id}`);
-          sid = s.id;
-          await batch(db, [sql(db, `UPDATE orders SET stripe_session_id = ?, stripe_session_url = ?, updated_at = ?
-            WHERE id = ? AND stripe_session_id IS NULL`, s.id, s.url, now, order.id)]);
+          found = await deps.stripe.createCheckoutSession(sessionParams(order, items, env.PUBLIC_ORIGIN), `sayless-checkout-${order.id}`);
         } catch (error) {
           if (!error.definite) continue;
+          // Refus explicite : aucune session n'existe pour cette clé, la pièce peut revenir.
           await batch(db, [...releaseStatements(db, order.id, now, 'expired'),
             audit(db, now, 'system', 'uncertain_session_closed', order.reference, `stripe_${error.status}`)]);
           released += 1;
+          continue;
+        }
+        sid = found.id;
+        const keep = running && validSession(found, order);
+        await batch(db, [sql(db, `UPDATE orders SET stripe_session_id = ?, stripe_session_url = ?, needs_stripe_check = ?, updated_at = ?
+          WHERE id = ? AND stripe_session_id IS NULL`, found.id, found.url, keep ? 0 : 1, now, order.id)]);
+        if (keep) {
+          recovered += 1;
+          continue;
+        }
+      } else if (running) {
+        const current = await deps.stripe.retrieveSession(sid);
+        if (current.status === 'open' && validSession(current, order)) {
+          await batch(db, [sql(db, 'UPDATE orders SET needs_stripe_check = 0, updated_at = ? WHERE id = ?', now, order.id)]);
+          recovered += 1;
+          continue;
+        }
+        if (current.status !== 'open') {
+          await reconcileSession(env, current, deps);
           continue;
         }
       }
@@ -303,7 +386,7 @@ export async function sweep(env, deps, limit = 20) {
       // Base ou Stripe indisponible pour cette commande : nouvel essai à la minute suivante.
     }
   }
-  return { released, checked: rows.length };
+  return { released, checked: rows.length, recovered };
 }
 
 // Import des ventes passées (saisies par le fondateur dans STUDIO, jamais versionnées).

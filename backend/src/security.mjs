@@ -67,24 +67,39 @@ export async function verifyTurnstile(env, token, ip, transport = fetch) {
 }
 
 // ---------- coordonnées scellées (AES-GCM 256, clé PII_KEY en secret Cloudflare) ----------
+// v2 : le chiffré est lié à sa commande (données associées) ; un chiffré copié sur une autre
+// commande ne s'ouvre pas. Le chiffrement est obligatoire : sans clé valide, aucun paiement.
 async function piiKey(env) {
   if (!env.PII_KEY) return null;
   const raw = fromB64url(env.PII_KEY.trim());
   if (raw.length !== 32) throw new Error('PII_KEY invalide : 32 octets attendus');
   return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
-export async function sealContact(env, contact) {
-  const key = await piiKey(env);
-  if (!key) return null;
+export async function piiReady(env) {
+  try {
+    return Boolean(await piiKey(env));
+  } catch {
+    return false;
+  }
+}
+const aad = (orderId) => new TextEncoder().encode(`order:${orderId}`);
+export async function sealContact(env, contact, orderId) {
+  let key;
+  try {
+    key = await piiKey(env);
+  } catch {
+    return null;
+  }
+  if (!key || typeof orderId !== 'string' || !orderId) return null;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = new TextEncoder().encode(JSON.stringify(contact));
-  const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
-  return `v1.${b64url(iv)}.${b64url(sealed)}`;
+  const sealed = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad(orderId) }, key, data);
+  return `v2.${b64url(iv)}.${b64url(sealed)}`;
 }
-export async function openContact(env, sealed) {
+export async function openContact(env, sealed, orderId) {
   const key = await piiKey(env);
   const [version, iv, data] = String(sealed).split('.');
-  if (!key || version !== 'v1') throw fail('not_configured');
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64url(iv) }, key, fromB64url(data));
+  if (!key || version !== 'v2') throw fail('not_configured');
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64url(iv), additionalData: aad(orderId) }, key, fromB64url(data));
   return JSON.parse(new TextDecoder().decode(plain));
 }
