@@ -8,7 +8,7 @@
 // sessions et les défis de la génération précédente sont alors invalidés. Une session n'est
 // acceptée que si sa passkey est active et appartient à la génération courante : vérifié à
 // chaque requête, et garanti par la base au moment de sa création (studio_session_admission).
-import { audit, b64url, batch, fail, getSettings, hmacB64, json, one, all, randomCode, sha256Hex, sql, timingSafeEqual, uuid, errorResponse } from './lib.mjs';
+import { audit, b64url, batch, fail, getSettings, hmacB64, json, one, all, normalizeCode, randomCode, sha256Hex, sql, timingSafeEqual, uuid, errorResponse } from './lib.mjs';
 import { clientHash, readJson } from './security.mjs';
 import { newChallenge, verifyAssertion, verifyRegistration, WebAuthnError } from './webauthn.mjs';
 import { handleStudio } from './studio.mjs';
@@ -30,7 +30,7 @@ export function studioConfig(env, request) {
 }
 const tokenHash = (env, token) => hmacB64(env.APP_SECRET, `session:${token}`);
 const recoveryHashOf = (env, token) => hmacB64(env.APP_SECRET, `recovery-device:${token}`);
-const codeHash = (env, code) => hmacB64(env.APP_SECRET, `recovery:${code.replace(/[^0-9A-Z]/gi, '').toUpperCase()}`);
+const codeHash = (env, code) => hmacB64(env.APP_SECRET, `recovery:${normalizeCode(code)}`);
 const cookieOf = (request, name) => (request.headers.get('Cookie') ?? '').split(';').map((c) => c.trim())
   .find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
 const setCookie = (name, token, maxAge) => `${name}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
@@ -142,7 +142,9 @@ export async function handleAdmin(request, env, deps) {
         // Première inscription seulement. Après un code de secours, le défi d'inscription est remis
         // par /recover à l'appareil qui a saisi le code : personne d'autre ne peut s'inscrire.
         if (enrolled || settings.studio_setup_used_at) throw fail('already_enrolled');
-        if (!env.ADMIN_SETUP_CODE || typeof body.setup_code !== 'string' || !timingSafeEqual(body.setup_code.trim(), env.ADMIN_SETUP_CODE)) {
+        // Code d'au moins 12 caractères utiles ; casse, espaces, tirets et O/0, I/L/1 tolérés à la saisie.
+        const expected = normalizeCode(env.ADMIN_SETUP_CODE);
+        if (expected.length < 12 || typeof body.setup_code !== 'string' || !timingSafeEqual(normalizeCode(body.setup_code), expected)) {
           await batch(ctx.db, [audit(ctx.db, now, 'inconnu', 'session_failed', 'setup', 'bad_setup_code')]);
           throw fail('invalid_setup_code');
         }

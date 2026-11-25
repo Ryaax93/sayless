@@ -35,6 +35,9 @@ CLE-PRIVEE-SAUVEGARDES*.json
 worker-secrets*.json
 pages-secrets*.json
 sayless-secrets-*/
+# Environnement de test Cloudflare : fichiers locaux de scripts/test-env.mjs (identifiants du compte)
+ops/wrangler.test.local.toml
+ops/test-env.local.json
 
 # Checkout-local tool state
 /.wrangler/
