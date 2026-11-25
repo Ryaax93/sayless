@@ -1,16 +1,21 @@
-# État de SAYLESS 2.0 au 25 novembre 2026
+# État de SAYLESS 2.0 — 25 novembre 2026 — API v1.3
 
-La préparation `work/frontend-api-v1-2` contient la boutique intégrée au contrat v1.2 et les trois commits de la PR nº 1. La [revue](REVUE-PR-1-WORK.md) détaille quatre corrections à obtenir avant fusion.
+Préparation sur `work/frontend-api-v1-2`, PR nº 2 en brouillon. Backend Claude `aab5270` intégré dans la préparation uniquement. [Contre-revue et résultats](REVUE-V1-3-WORK.md) ; [passation](HANDOFF-CLAUDE.md).
 
-| Fonction | Résultat sur la préparation | Étape restante |
+| Fonction | Réalisé et vérifié | Reste à valider |
 | --- | --- | --- |
-| Identité, photos, lookbook, barre rose animée, guide, pages secondaires | Design conservé. Logo officiel dans la barre, commande pause/reprise. Aucun post-it flottant. | Recette sur Safari et vrai iPhone. |
-| Catalogue et stock | API du catalogue et du stock raccordées. La barre et la fiche partagent le total vérifié, chaque taille expose un état de disponibilité. | Inventaire physique et saisie S/M/L. Aucun chiffre théorique publié comme disponible. |
-| Panier et livraison | Une pièce, zone et code postal contrôlés, sélection explicite du mode et du relais. | Compte et tarifs du transporteur, points réels et adresse complète vérifiés. |
-| Devis et récapitulatif | Total serveur, CGV, renouvellement anti-abus et reprise de la même tentative testés localement. | Version de CGV validée, clé publique Turnstile et Siteverify en environnement de test. |
-| Réservation, paiement, retour | Vrai code backend sur D1 locale, Stripe simulé. Le client vérifie le statut avec référence et session. | Corrections de reprise et des ventes 1.0, Stripe test hébergé, wallets sur appareils compatibles. |
-| STUDIO | Code de Claude et tests locaux des passkeys, des codes de secours, des sessions et de l’inventaire. | Révocation après récupération, test sur appareil, puis prochains écrans du plan. |
-| Données, commandes, notifications | Migrations, journal, chiffrement et opérations présents. | Sauvegardes cohérentes, conservation validée, confirmations durables, expéditions, suivi, Discord et Resend réels. |
-| Formulaires, rétractation et contact | Les formulaires préparent un e-mail. Le suivi indique l’indisponibilité du service quand il répond 503. | Réception et preuves durables, mentions vendeur, médiateur, adresse de retour et délais. |
+| Identité, logo, photos, lookbook, guide, barre rose | Direction artistique conservée, animation continue et pause/reprise, réduction des mouvements prévue. Aucun post-it. | Vrai iPhone/Safari, VoiceOver et mesures physiques du guide. |
+| Catalogue et stock | Données serveur, `total_available`, états par taille, rupture/réservation/pause/panne distincts. Pas de quantité théorique injectée. | Inventaire physique S/M/L et D1 hébergée. |
+| Livraison et devis | Une pièce, code postal, zone, relais avec adresse complète, devis 79,90 €/83,50 € vérifiés localement. | Transporteur réel, validation des tarifs, étiquette et expédition. |
+| CGV et paiement | Version du devis exigée, refus si version publique différente, idempotence, reprise et états terminaux, statut confirmé par API. Paiement fermé par défaut. | Archive CGV obligatoire (B2), texte public identique (C1), Stripe TEST externe, Turnstile et wallets. |
+| Suivi et demandes | Jeton en mémoire/Bearer, réponse neutre au lien demandé, formulaires contact/retour/rétractation, références après persistance, réseau incertain explicite. | Livraison réelle des e-mails, confirmation durable après erreur d'outbox (B1). |
+| STUDIO et authentification | Écrans Claude conservés, 84 tests backend/STUDIO rejoués, ancienne récupération corrigée ; contrôle visuel desktop/mobile. | SimpleWebAuthn à coordonner ; Face ID réel, Safari, Web Push, accessibilité sur appareil. |
+| Automatisations et sauvegardes | Code de Claude, tests locaux et quatre anciennes régressions réussis. | Services externes, budget CPU/quotas, restauration et surveillance hébergées, durée de conservation validée. |
+| Cloudflare TEST | Build frontend séparé et fermé, bundle Pages/Worker compilé, procédure complémentaire. | Ressources TEST, secrets, accès et autorisation de déployer. |
+| Aperçu privé | Actualisation visuelle préparée, boutique statique sans API active, aucun faux stock ni paiement. | Voir résultat de publication dans la PR ; distinct de la recette Cloudflare. |
 
-L’infrastructure hébergée, les paiements réels et le site officiel ne font pas partie de cette recette.
+**172 tests passent, plus 13 assertions commerciales. Deux nouvelles régressions restent en échec et sont conservées : `npm run test:review:v13`.** Le tout n'est donc pas présenté comme une recette commerciale validée.
+
+Manquent encore : inventaire exact par taille, mesures du vêtement, identité/statut/immatriculation et coordonnées du vendeur, TVA applicable, hébergeur contractuel, médiateur désigné, adresse et procédure de retour, délais transporteur, version juridique validée, durées de conservation et paramètres des services TEST. Ne pas inventer ces éléments. La liste administrative détaillée reste dans `INFORMATIONS-A-COMPLETER.md`.
+
+Aucune fusion de PR ni modification de `main`, `v2`, du domaine, du DNS, de Stripe réel ou de la boutique publique.

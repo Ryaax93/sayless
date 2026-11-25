@@ -24,9 +24,13 @@ const checkoutMessages = {
   quote_mismatch: 'La sélection a changé. Demande un nouveau récapitulatif.',
   price_changed: 'Le montant a changé. Demande un nouveau récapitulatif et vérifie-le avant de continuer.',
   invalid_quote: 'Le récapitulatif reçu est incomplet. Aucun paiement n’est possible.',
+  invalid_request: 'Vérifie les champs de ta demande.',
+  request_pending: 'Une demande est déjà en cours d’envoi. Attends son résultat.',
+  unauthenticated: 'Ce lien de suivi est invalide ou a expiré. Demande un nouveau lien.',
+  not_found: 'Cette commande n’a pas pu être vérifiée. Contacte SAYLESS.',
   terms_required: 'Lis et accepte les conditions générales de vente avant de continuer.',
   terms_outdated:
-    'Les conditions de vente ont changé. Recharge la page pour les relire avant une nouvelle tentative.',
+    'Les conditions de vente ont changé. Demande un nouveau récapitulatif et relis-les avant de les accepter.',
   challenge_required: 'Termine la vérification de sécurité.',
   challenge_failed: 'La vérification de sécurité doit être recommencée.',
   challenge_unavailable: 'La vérification de sécurité est indisponible. Le paiement reste bloqué.',
@@ -79,8 +83,7 @@ function shippingForm(v, phase, hasQuote) {
     .join('');
   const points = v.points
     .map((point) => {
-      const address = typeof point.address === 'string' ? point.address : point.address?.line1;
-      const line = [point.network, address, point.postcode, point.city].filter(Boolean).join(' · ');
+      const line = [point.network, point.address?.line1, point.address?.line2, point.postcode, point.city].filter(Boolean).join(' · ');
       return `<label class="shipping-option ${v.relayId === point.id ? 'selected' : ''}">
       <input type="radio" name="relay" value="${escapeHTML(point.id)}" ${v.relayId === point.id ? 'checked' : ''}>
       <span><strong>${escapeHTML(point.name)}</strong><small>${escapeHTML(line)}</small></span>
@@ -121,12 +124,12 @@ function quoteSummary(state, postcode) {
   const relay = q.relay;
   const destination = relay
     ? `<p class="relay-summary"><strong>${escapeHTML(relay.label)}</strong><br>
-    ${escapeHTML([relay.network, relay.postcode, relay.city].filter(Boolean).join(' · '))}</p>`
+    ${escapeHTML([relay.network, relay.address?.line1, relay.address?.line2, relay.postcode, relay.city].filter(Boolean).join(' · '))}</p>`
     : `<p class="small-text">${postcode ? 'Code postal · ' + escapeHTML(postcode) : 'Destination confirmée dans le devis.'}</p>`;
   const consent = state.attempt
     ? ''
-    : `<label class="terms-choice"><input id="accept-terms" type="checkbox" ${state.accepted ? 'checked' : ''}>
-    <span>J’ai lu et j’accepte les <a href="/#/cgv" target="_blank" rel="noopener">conditions générales de vente</a>.</span></label>`;
+    : `<label class="terms-choice"><input id="accept-terms" type="checkbox" ${window.SaylessConfig.termsVersion !== q.terms_version ? 'disabled' : ''} ${state.accepted ? 'checked' : ''}>
+    <span>J’ai lu et j’accepte les <a href="/#/cgv" target="_blank" rel="noopener">conditions générales de vente</a> · version ${escapeHTML(q.terms_version)}.</span></label>${window.SaylessConfig.termsVersion === q.terms_version ? '' : '<p class="notice">Cette version des conditions n’est pas encore consultable ici. Le paiement reste fermé.</p>'}`;
   const challenge =
     !state.attempt || state.needsChallenge
       ? `<div id="checkout-challenge" aria-label="Vérification de sécurité"></div>
@@ -230,9 +233,6 @@ function confirmationPage() {
 function cancellationPage() {
   return `<section class="success-layout"><span class="eyebrow">SAYLESS · TON PARCOURS</span><h1>TU PRENDS<br>LE TEMPS.</h1><p>Tu as quitté la page de paiement. Ce retour ne confirme ni un paiement ni la libération de ta pièce.</p><p>Le serveur vérifiera la session et libérera la réservation si elle expire sans paiement.</p><a href="#/paiement" class="button checkout-action">Retrouver ma tentative</a><div class="checkout-policy-links"><a href="#/suivi">Vérifier ma commande</a><a href="mailto:SayLe2s@outlook.com">Contacter SAYLESS</a></div></section>`;
 }
-function trackingPage() {
-  return `<section class="checkout-page tracking-page"><span class="eyebrow">SAYLESS · À TES CÔTÉS</span><h1>TA COMMANDE.<br>SON PARCOURS.</h1><p>Le suivi en ligne attend l’activation des e-mails de commande. Tu peux vérifier la disponibilité du service ci-dessous, ou nous écrire.</p><form id="tracking-form"><div class="field"><label for="tracking-reference">Référence de commande</label><input id="tracking-reference" name="reference" required maxlength="80" autocomplete="off"></div><div class="field"><label for="tracking-email">Adresse e-mail de la commande</label><input id="tracking-email" name="email" type="email" required maxlength="254" autocomplete="email"></div><button class="button" type="submit">Demander mon lien de suivi</button><p id="tracking-result" role="status" tabindex="-1"></p></form><a class="text-link" href="mailto:SayLe2s@outlook.com">Contacter SAYLESS par e-mail</a></section>`;
-}
 
 window.SaylessCheckoutUI = (() => {
   const values = {
@@ -294,13 +294,12 @@ window.SaylessCheckoutUI = (() => {
       stock = window.SaylessInventory.current();
     const configured =
       window.SaylessConfig.checkoutEnabled &&
-      window.SaylessConfig.termsVersion &&
-      window.SaylessConfig.turnstileSiteKey;
+      (s.attempt || (s.quote?.terms_version && window.SaylessConfig.termsVersion === s.quote.terms_version && window.SaylessConfig.turnstileSiteKey));
     const waiting = Date.now() < s.retryAt;
     const ready =
       !!configured &&
       !values.busy &&
-      !['submitting', 'redirect'].includes(s.phase) &&
+      !['submitting', 'redirect', 'closed'].includes(s.phase) &&
       !waiting &&
       (s.attempt
         ? !s.needsChallenge ||
@@ -450,7 +449,7 @@ window.SaylessCheckoutUI = (() => {
           typeof p.name !== 'string' ||
           !p.name ||
           p.open === false ||
-          (p.country && p.country !== 'FR') ||
+          !window.SaylessAPIContract.validRelay(p) ||
           ids.has(p.id)
         )
           return false;
@@ -499,20 +498,33 @@ window.SaylessCheckoutUI = (() => {
     values.error = null;
     stockChanged();
     try {
-      const result = await flow.submit({ termsVersion: window.SaylessConfig.termsVersion, turnstile: token });
+      const result = await flow.submit({ termsVersion: flow.state.quote?.terms_version, turnstile: token });
       token = '';
       if (currentRoute() === 'paiement') window.location.assign(result.url);
       else flow.state.phase = 'uncertain';
     } catch (e) {
       values.error = e;
       token = '';
+      if (e.code === 'attempt_closed' && flow.state.closed) {
+        const closed = flow.state.closed;
+        returnContext = { order_reference: closed.order_reference, session_id: closed.session_id };
+        confirmation.reference = closed.order_reference;
+        confirmation.status = closed.payment_status;
+        statusTries = 0;
+        statusRetryAt = 0;
+        // Ne jamais proposer un nouvel achat à la place d'un paiement déjà reçu ou en traitement.
+        if (!['expired', 'failed'].includes(closed.payment_status)) {
+          history.replaceState({ saylessReturn: returnContext }, '', '/#/confirmation');
+          render();
+        }
+      }
     } finally {
       values.busy = false;
       refreshCheckout(values.error ? '#checkout-error' : null);
     }
   }
   function captureReturn() {
-    if (!['/merci', '/commande-annulee'].includes(location.pathname.replace(/\/$/, ''))) return;
+    if (!['/merci', '/commande-annulee'].includes(location.pathname.replace(/\/$/, '')) && !location.hash.startsWith('#/confirmation')) return;
     const p = new URLSearchParams(location.search),
       ref = p.get('ref'),
       sid = p.get('session_id');
@@ -617,30 +629,7 @@ window.SaylessCheckoutUI = (() => {
       values.postcode = document.querySelector('#shipping-postcode').value.trim();
       await makeQuote();
     }
-    if (e.target.id === 'tracking-form') {
-      e.preventDefault();
-      const form = e.target,
-        button = form.querySelector('button'),
-        result = form.querySelector('#tracking-result');
-      if (button.disabled) return;
-      const data = new FormData(form);
-      button.disabled = true;
-      try {
-        const response = await window.SaylessAPI.lookupOrder({
-          reference: String(data.get('reference')).trim(),
-          email: String(data.get('email')).trim(),
-        });
-        result.textContent =
-          response.accepted === true
-            ? 'Si les informations correspondent à une commande, un lien de suivi sera envoyé à cette adresse.'
-            : 'Le service n’a pas confirmé ta demande. Contacte SAYLESS.';
-      } catch (error) {
-        result.textContent = checkoutMessage(error) + ' Aucun lien n’a été confirmé comme envoyé.';
-      } finally {
-        button.disabled = false;
-        result.focus();
-      }
-    }
+
   });
   document.addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -677,5 +666,5 @@ window.SaylessCheckoutUI = (() => {
   setInterval(() => {
     if (!document.hidden && currentRoute() === 'paiement') stockChanged();
   }, 1000);
-  return { values, flow, confirmation, mount, unmount, stockChanged, cartChanged, captureReturn, checkStatus };
+  return { values, flow, confirmation, mount, unmount, stockChanged, cartChanged, captureReturn, checkStatus, loadTurnstile };
 })();

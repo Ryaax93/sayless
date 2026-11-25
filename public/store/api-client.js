@@ -1,8 +1,26 @@
-/* Frontière boutique / backend Claude. Contrat commun v1.2 ; aucun calcul de confiance ici. */
+/* Frontière boutique / backend Claude. Contrat commun v1.3 ; aucun calcul de confiance ici. */
 (function (root) {
   'use strict';
   const MAX_AGE_MS = 30000;
   const orderRef = /^SL-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+  const termsVersion = /^[A-Za-z0-9._-]{1,40}$/;
+  const paymentStates = ['pending', 'processing', 'paid', 'review', 'expired', 'failed', 'refunded'];
+  const isText = (v, max = 200) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
+  function validRelay(p, label = 'name') {
+    const a = p?.address;
+    if (!isText(p?.id, 80) || !isText(p?.[label]) || !isText(a?.line1) ||
+        !isText(a?.city, 80) || (a?.line2 != null && typeof a.line2 !== 'string') || a?.country !== 'FR') return false;
+    try { destination(a.postcode, a.country); } catch { return false; }
+    return p.postcode === a.postcode && p.city === a.city && p.open !== false;
+  }
+  function validOrder(o) {
+    return orderRef.test(o?.order_reference || '') && paymentStates.includes(o.payment_status) &&
+      Number.isFinite(Date.parse(o.updated_at)) && ['home', 'relay', null].includes(o.shipping) &&
+      Array.isArray(o.items) && o.items.length > 0 && o.items.every(i => ['S', 'M', 'L', null].includes(i.size) && Number.isSafeInteger(i.quantity) && i.quantity > 0) &&
+      Array.isArray(o.steps) && o.steps.every(s => ['prepared', 'shipped', 'delivered', 'returned'].includes(s.step) && Number.isFinite(Date.parse(s.at))) &&
+      (o.relay === null || (o.relay && isText(o.relay.name))) &&
+      (o.tracking === null || (o.tracking && (o.tracking.carrier == null || isText(o.tracking.carrier)) && (o.tracking.number == null || isText(o.tracking.number))));
+  }
   class ApiError extends Error {
     constructor(code, status = 0, details = {}, retryAfterMs = 0) {
       super(code);
@@ -86,8 +104,8 @@
       throw new ApiError('destination_not_supported', 422);
     return postcode.trim();
   }
-  function validQuote(q, input, now = Date.now()) {
-    if (!q || typeof q.id !== 'string' || !q.id || q.currency !== 'EUR' || !(Date.parse(q.expires_at) > now))
+  function validQuote(q, input, now = Date.now(), { legacyAttempt = false } = {}) {
+    if (!q || typeof q.id !== 'string' || !q.id || !termsVersion.test(q.terms_version || '') || q.currency !== 'EUR' || !(Date.parse(q.expires_at) > now))
       return false;
     if (
       !['subtotal_cents', 'shipping_cents', 'total_cents'].every(
@@ -100,7 +118,7 @@
       return false;
     if (
       q.shipping === 'relay' &&
-      (!q.relay || q.relay.id !== input.relay_id || typeof q.relay.label !== 'string')
+      (!(legacyAttempt ? q.relay && isText(q.relay.label) : validRelay(q.relay, 'label')) || q.relay.id !== input.relay_id)
     )
       return false;
     if (q.shipping === 'home' && q.relay !== null) return false;
@@ -203,6 +221,8 @@
       if (input.shipping === 'relay' && !input.relay_id) throw new ApiError('relay_required', 422);
       if (!retry && (typeof input.turnstile !== 'string' || !input.turnstile.trim()))
         throw new ApiError('challenge_required', 403);
+      if (!termsVersion.test(input.terms_version || '') || input.terms_version !== quote.terms_version)
+        throw new ApiError('terms_outdated', 409);
       const seen = new Set();
       const items = input.items.map((item) => {
         if (
@@ -267,10 +287,20 @@
         request('/api/relay-points?' + new URLSearchParams({ postcode, country })),
       checkoutStatus: ({ order_reference, session_id }) =>
         request('/api/checkout/status', { method: 'POST', body: { order_reference, session_id } }),
-      order: (token) => request('/api/order', { headers: { Authorization: 'Bearer ' + token } }),
+      order: async (token) => {
+        if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{40,60}$/.test(token)) throw new ApiError('unauthenticated', 401);
+        const data = await request('/api/order', { headers: { Authorization: 'Bearer ' + token } });
+        if (!validOrder(data)) throw new ApiError('invalid_response');
+        return data;
+      },
       lookupOrder: ({ reference, email }) =>
         request('/api/order/lookup', { method: 'POST', body: { reference, email } }),
-      request: (input) => request('/api/requests', { method: 'POST', body: input }),
+      request: async (input) => {
+        const { type, order_reference, name, email, message, turnstile } = input;
+        const data = await request('/api/requests', { method: 'POST', body: { type, order_reference, name, email, message, turnstile } });
+        if (!/^R-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/.test(data.reference || '') || data.type !== type || !Number.isFinite(Date.parse(data.received_at))) throw new ApiError('invalid_response');
+        return data;
+      },
       checkout,
     });
   }
@@ -282,6 +312,10 @@
     destination,
     MAX_AGE_MS,
     orderRef,
+    termsVersion,
+    paymentStates,
+    validRelay,
+    validOrder,
   });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { bench, startDatabases, stopDatabases, ORIGIN, event } from './backend/helpers.mjs';
 import { recordInventory } from '../backend/src/stock.mjs';
+import { publishTerms } from '../backend/src/terms.mjs';
 import { handlePublicApi } from '../backend/src/routes.mjs';
 
 async function loadClient(name) {
@@ -47,7 +48,7 @@ async function fixture({ counted = true, payments = true, dropResponse = false }
       note: 'Base éphémère uniquement',
       now: b.clock.t,
     });
-  await b.real.prepare("UPDATE settings SET value = ? WHERE key = 'terms_version'").bind(terms).run();
+  await publishTerms(b.real, { version: terms, body: 'Conditions de recette uniquement. '.repeat(10), actor: 'recette', now: b.clock.t });
   const requests = [];
   const fetchImpl = async (path, init) => {
     const headers = new Headers(init.headers);
@@ -219,4 +220,64 @@ test('paramètres désactivés, CGV obsolètes et suivi indisponible donnent des
     api.lookupOrder({ reference: 'SL-TEST-TEST', email: 'recette@example.invalid' }),
     (e) => e.code === 'not_configured',
   );
+});
+
+test('v1.3 : changement serveur des CGV entre devis et paiement, nouveau consentement requis', async () => {
+  const { b, flow, quote, requests } = await fixture();
+  const q = await quote(); assert.equal(q.terms_version, terms); flow.accept(true);
+  await b.real.prepare("UPDATE settings SET value='version-suivante' WHERE key='terms_version'").run();
+  await assert.rejects(flow.submit(credentials), e => e.code === 'terms_outdated');
+  assert.equal(flow.state.accepted, false); assert.equal(b.stripe.created, 0);
+  assert.equal(requests.find(r => r.path === '/api/checkout').body.terms_version, q.terms_version);
+});
+test('v1.3 : réponse perdue et devis expiré, puis tentative payée retrouvée sans nouveau stock', async () => {
+  const { b, flow, quote } = await fixture({ dropResponse: true });
+  await quote(); flow.accept(true); await assert.rejects(flow.submit(credentials));
+  b.clock.t += 660;
+  const result = await flow.submit(); assert.equal(b.stripe.created, 1);
+  const sid = result.url.split('/').at(-1); b.stripe.pay(sid);
+  await b.webhook(event('checkout.session.completed', sid));
+  await assert.rejects(flow.submit(), e => e.code === 'attempt_closed');
+  assert.equal(flow.state.closed.payment_status, 'paid'); assert.equal(flow.state.closed.session_id, sid);
+  assert.equal(flow.state.attempt.order_reference, result.order_reference);
+  assert.equal(b.stripe.created, 1); assert.deepEqual(await b.inv(skus[1]), [0, 0]);
+});
+test('v1.3 : adresses des relais identiques dans la recherche, le devis et la commande', async () => {
+  const { b, api, quote, flow } = await fixture();
+  const point = (await api.relayPoints({ postcode: '75016' })).points[0];
+  assert.equal(contract.validRelay(point), true);
+  const q = await quote({ ...selection, shipping: 'relay', relay_id: point.id, postcode: point.postcode });
+  assert.deepEqual(q.relay.address, point.address); flow.accept(true); await flow.submit(credentials);
+  const row = await b.real.prepare('SELECT relay_snapshot FROM orders LIMIT 1').first();
+  assert.deepEqual(JSON.parse(row.relay_snapshot).address, point.address);
+});
+test('v1.3 : suivi authentifié, jeton expiré et lien non énumérable avec e-mails simulés', async () => {
+  const { b, api, quote, flow } = await fixture();
+  b.env.RESEND_API_KEY = 'fixture-only'; b.env.EMAIL_FROM = 'recette@example.invalid';
+  const sent = [];
+  b.deps.senders = { email: async (payload, row) => {
+    const { openPayload } = await import('../backend/src/security.mjs');
+    sent.push(await openPayload({ ...b.env, db: b.db }, payload, 'outbox:'+row.dedupe));
+  } };
+  await quote(); flow.accept(true); const result = await flow.submit(credentials);
+  const sid = result.url.split('/').at(-1); b.stripe.pay(sid); await b.webhook(event('checkout.session.completed', sid));
+  const valid = await api.lookupOrder({ reference: result.order_reference, email: 'client.test@example.invalid' });
+  const invalid = await api.lookupOrder({ reference: result.order_reference, email: 'unknown@example.invalid' });
+  assert.deepEqual(valid, invalid); assert.equal(valid.accepted, true);
+  const linkMail = sent.find(m => m.text.includes('/#/suivi?t=')); assert.ok(linkMail);
+  const token = linkMail.text.match(/\/\#\/suivi\?t=([A-Za-z0-9_-]+)/)[1];
+  const order = await api.order(token); assert.equal(order.order_reference, result.order_reference); assert.equal(order.payment_status, 'paid');
+  assert.ok(!JSON.stringify(order).includes('client.test@example.invalid'));
+  b.clock.t += 1801; await assert.rejects(api.order(token), e => e.code === 'unauthenticated');
+});
+test('v1.3 : contact, retour et rétractation enregistrés chiffrés, accusés en file sans vrai envoi', async () => {
+  const { b, api } = await fixture();
+  b.env.RESEND_API_KEY = 'fixture-only'; b.env.EMAIL_FROM = 'recette@example.invalid'; b.deps.sendNow = async () => {};
+  for (const type of ['contact', 'return', 'withdrawal']) {
+    const receipt = await api.request({ type, name: 'RECETTE UNIQUEMENT', email: 'recette@example.invalid', message: type === 'withdrawal' ? '' : 'Message de recette uniquement', turnstile: 'fixture' });
+    assert.match(receipt.reference, /^R-/); assert.equal(receipt.type, type);
+  }
+  const rows = await b.rows('SELECT * FROM customer_requests'); assert.equal(rows.length, 3); assert.ok(!JSON.stringify(rows).includes('recette@example.invalid'));
+  assert.equal(await b.count("SELECT COUNT(*) FROM outbox WHERE channel='email' AND dedupe LIKE 'email:request_ack:%'"), 3);
+  await assert.rejects(api.request({ type: 'contact', email: 'not-an-email', message: 'Test', turnstile: 'fixture' }), e => e.code === 'invalid_request' && e.details.field === 'email');
 });

@@ -14,7 +14,7 @@
     "db:generate": "drizzle-kit generate",
     "dev:storefront": "node scripts/dev-storefront.mjs",
     "build:storefront": "node scripts/build-storefront.mjs",
-    "test:frontend": "node --test tests/api-client.test.mjs tests/stock-display.test.mjs tests/portable.test.mjs tests/checkout-flow.test.mjs tests/checkout-return.test.mjs && node tests/commerce.test.cjs",
+    "test:frontend": "node --test tests/api-client.test.mjs tests/stock-display.test.mjs tests/portable.test.mjs tests/checkout-flow.test.mjs tests/checkout-return.test.mjs tests/customer-service.test.mjs tests/test-config.test.mjs && node tests/commerce.test.cjs",
     "test:inventory": "node --test tests/inventory.test.mjs",
     "test:backend": "node --test tests/backend/scenarios.test.mjs tests/backend/parity.test.mjs tests/backend/decisions.test.mjs tests/backend/studio.test.mjs tests/backend/corrections.test.mjs tests/backend/studio-screens.test.mjs tests/backend/webauthn.test.mjs tests/backend/automations.test.mjs",
     "check:cloudflare": "npm run build:studio && wrangler deploy --dry-run --outdir .wrangler/check-ops -c ops/wrangler.toml && wrangler pages functions build --outdir .wrangler/check-pages",
@@ -24,7 +24,9 @@
     "start:legacy": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "build:studio": "node ops/build-studio.mjs",
     "test:integration": "node --test tests/frontend-integration.test.mjs",
-    "test:review": "node --test tests/review/business-invariants.test.mjs"
+    "test:review": "node --test tests/review/business-invariants.test.mjs tests/review/recovery-safety.test.mjs",
+    "build:storefront:test": "node scripts/build-storefront.mjs --test",
+    "test:review:v13": "node --test tests/review/v13-open-issues.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
