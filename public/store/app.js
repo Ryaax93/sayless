@@ -140,16 +140,15 @@ function storyPage() {
 function sizeGuideContent(modal = false) {
   return `${modal?'<span class="eyebrow">PINK 001 · COUPE OVERSIZE</span><h2 id="size-title">TA TAILLE,<br>TON STYLE.</h2>':'<h2>Le tableau des mesures</h2>'}<p>Mesures en centimètres reprises du site SAYLESS actuel. Leur exactitude sur les pièces vendues reste à confirmer.</p><div class="table-scroll"><table class="size-table"><caption class="sr-only">Mesures du hoodie Pink 001 en centimètres</caption><thead><tr><th scope="col">Taille</th><th scope="col">Longueur</th><th scope="col">Poitrine</th><th scope="col">Épaules</th></tr></thead><tbody><tr><th scope="row">S</th><td>71</td><td>63</td><td>58</td></tr><tr><th scope="row">M</th><td>74</td><td>69</td><td>63</td></tr><tr><th scope="row">L</th><td>76</td><td>74</td><td>67</td></tr></tbody></table></div><div class="notice">Tableau provisoire : « poitrine » est le libellé d’origine et ne doit pas être interprété comme un tour de poitrine. La méthode de mesure et les valeurs doivent être confirmées sur ce modèle. Si tu hésites, <a href="#/contact">demande-nous conseil</a>.</div><div class="size-advice"><h3>Pour choisir ta coupe</h3><p><strong>Un seul modèle, unisexe : femme et homme.</strong> Pour les personnes de petite taille, nous recommandons le <strong>S</strong>. Le rendu reste oversize.</p><p>Prends un hoodie dont tu aimes le volume et pose-le à plat, sans l’étirer. Note sa longueur, sa largeur sous les aisselles et la distance entre les coutures d’épaules. Compare ensuite avec le tableau une fois sa méthode confirmée.</p><p>Les lettres S, M et L ne suffisent pas à garantir le rendu. Si tu hésites, demande conseil en précisant la coupe souhaitée et les mesures de ton vêtement de référence.</p></div>${modal?'':'<div class="size-illustration"><svg viewBox="0 0 140 130" aria-hidden="true"><path d="m48 18-22 12-20 45 23 11 13-27v60h56V59l13 27 23-11-20-45-22-12c-4 17-40 17-44 0ZM70 30v89M43 58h54"/><path d="M50 8h40M105 36v76" stroke-dasharray="3 3"/></svg><span>Le schéma est indicatif. Compare la coupe à un hoodie que tu portes déjà, une fois la méthode de mesure confirmée.</span></div>'+supportCallout()}`;
 }
-function contactForm(isReturn = false) {
-  return `<form id="message-form" data-kind="${isReturn?'return':'contact'}"><div class="form-grid"><div class="field"><label for="contact-name">Ton nom <span class="small-text">(facultatif)</span></label><input id="contact-name" name="name" autocomplete="name" maxlength="100" placeholder="Ton prénom et ton nom"></div><div class="field"><label for="contact-order">N° de commande <span class="small-text">(facultatif)</span></label><input id="contact-order" name="order" maxlength="80" placeholder="Si tu as déjà commandé"></div></div>${isReturn?'':`<div class="field"><label for="contact-subject">Ta question concerne</label><select id="contact-subject" name="subject"><option>Une taille ou le produit</option><option>Une commande existante</option><option>La livraison</option><option>Un retour</option><option>Autre chose</option></select></div>`}<div class="field"><label for="contact-message">Ton message</label><textarea id="contact-message" name="message" required minlength="5" maxlength="2500" placeholder="${isReturn?'Précise la commande et la pièce concernées.':'Dis-nous ce qu’on peut faire pour toi.'}"></textarea></div><button type="submit" class="button">Préparer mon e-mail</button><p class="small-text" style="margin-top:16px">Rien n’est envoyé depuis ce formulaire. Tu pourras relire ton message et ouvrir ta messagerie pour l’envoyer.</p><div id="form-result" class="form-result" hidden tabindex="-1" aria-live="polite"></div></form>`;
-}
+function contactForm(isReturn = false) { return window.SaylessService.form(isReturn ? 'return' : 'contact'); }
+
 function infoPage(route) {
   const legal=legalContent(route);
   if(legal) return legalLayout(route,legal.title,legal.description,legal.content);
   const map={
     aide:['LES RÉPONSES,<br>SANS DÉTOUR.','Avant de choisir ta pièce, on répond aux questions qui comptent.',faqMarkup()+supportCallout()],
     tailles:['LA BONNE<br>TAILLE POUR TOI.','Pink 001 est un gilet rose unisexe à la coupe oversize, proposé en S, M et L.',sizeGuideContent()],
-    contact:['ON SE<br>PARLE ?','Une question sur le hoodie, une taille ou ta commande ? Écris-nous.',`<div class="contact-card"><span>LE CONTACT SAYLESS</span><a href="mailto:SayLe2s@outlook.com">SayLe2s@outlook.com</a></div><h2>Prépare ton message</h2>${contactForm()}`]
+    contact:['ON SE<br>PARLE ?','Une question sur le hoodie, une taille ou ta commande ? Écris-nous.',`<div class="contact-card"><span>LE CONTACT SAYLESS</span><a href="mailto:SayLe2s@outlook.com">SayLe2s@outlook.com</a></div><h2>Ton message</h2>${contactForm()}`]
   };
   if(!map[route]) return null;
   return helpLayout(route,...map[route]);
@@ -161,6 +160,8 @@ function currentRoute() {
 function render() {
   delete main.dataset.paymentStatus;
   window.SaylessCheckoutUI.unmount();
+  window.SaylessService.unmount();
+  window.SaylessService.capture();
   closeMenu();
   closeDialogs(false);
   if (productObserver) productObserver.disconnect();
@@ -179,6 +180,7 @@ function render() {
   window.SaylessInventory.enter();
   if(route==='paiement')window.SaylessCheckoutUI.mount();
   if(route==='confirmation')window.SaylessCheckoutUI.checkStatus();
+  if(route==='suivi')window.SaylessService.readTracking();
   updateCartCount();
 }
 function setupProductBar() {
@@ -248,14 +250,14 @@ function prepareEmail(form) {
   const message = String(values.get('message')||'').trim();
   const subject = isReturn ? 'SAYLESS — Demande de retour / rétractation' : 'SAYLESS — '+String(values.get('subject')||'Question');
   const body = ['Bonjour SAYLESS,','',message,'',order?'Référence de commande : '+order:'',name?'Nom : '+name:''].filter((line,index,lines)=>line || (index>0 && lines[index-1])).join('\n');
-  const result = $('#form-result');
+  const result = form.querySelector('[data-form-result]');
   result.hidden=false;
   result.innerHTML = `<strong>Ton message est prêt, mais pas encore envoyé.</strong><p class="small-text">Relis-le ci-dessous, puis ouvre ta messagerie. Tu pourras l’envoyer toi-même à SAYLESS.</p><textarea readonly aria-label="Message préparé">${escapeHTML(body)}</textarea><a class="button" href="mailto:SayLe2s@outlook.com?subject=${encodeURIComponent(subject)}&amp;body=${encodeURIComponent(body)}">Ouvrir ma messagerie</a><p class="small-text" style="margin:15px 0 0">Si ta messagerie ne s’ouvre pas, copie le texte et envoie-le à SayLe2s@outlook.com.</p>`;
   result.focus({preventScroll:true});
   result.scrollIntoView({behavior:'smooth',block:'center'});
 }
 
-function prepareWithdrawal(form) {
+function withdrawalMessage(form) {
   const data=new FormData(form);
   const value=key=>String(data.get(key)||'').trim();
   const readableDate=key=>value(key)?value(key).split('-').reverse().join('/'):'Non précisée';
@@ -274,9 +276,13 @@ function prepareWithdrawal(form) {
     'Date de la déclaration : '+new Intl.DateTimeFormat('fr-FR').format(new Date()),
     'Signature : uniquement si ce formulaire est envoyé sur papier.'
   ].join('\n');
-  const result=$('#form-result');
+  return body;
+}
+function prepareWithdrawal(form) {
+  const body=withdrawalMessage(form);
+  const result=form.querySelector('[data-form-result]');
   result.hidden=false;
-  result.innerHTML=`<strong>Déclaration préparée, pas encore envoyée.</strong><p>Relis le texte puis envoie-le depuis ta messagerie. Ce site n’enregistre pas ta demande et n’émet pas d’accusé de réception.</p><textarea readonly aria-label="Déclaration préparée">${escapeHTML(body)}</textarea><a class="button" href="mailto:SayLe2s@outlook.com?subject=${encodeURIComponent('SAYLESS — Rétractation — '+value('order'))}&amp;body=${encodeURIComponent(body)}">Ouvrir ma messagerie</a><p class="small-text">Tu peux aussi copier ce texte et l’envoyer à SayLe2s@outlook.com. Conserve une preuve de ton envoi.</p>`;
+  result.innerHTML=`<strong>Déclaration préparée, pas encore envoyée.</strong><p>Relis le texte puis envoie-le depuis ta messagerie. Ce site n’enregistre pas ta demande et n’émet pas d’accusé de réception.</p><textarea readonly aria-label="Déclaration préparée">${escapeHTML(body)}</textarea><a class="button" href="mailto:SayLe2s@outlook.com?subject=${encodeURIComponent('SAYLESS — Rétractation')}&amp;body=${encodeURIComponent(body)}">Ouvrir ma messagerie</a><p class="small-text">Tu peux aussi copier ce texte et l’envoyer à SayLe2s@outlook.com. Conserve une preuve de ton envoi.</p>`;
   result.focus({preventScroll:true});
   result.scrollIntoView({behavior:'smooth',block:'center'});
 }
@@ -343,11 +349,6 @@ document.addEventListener('click', event=>{
     closeMenu();closeDialogs(false);
     if(target.getAttribute('href')===location.hash)window.scrollTo({top:0,behavior:'smooth'});
   }
-});
-document.addEventListener('submit',event=>{
-  const form=event.target;
-  if(form.id==='message-form'){event.preventDefault();prepareEmail(form);}
-  if(form.id==='withdrawal-form'){event.preventDefault();prepareWithdrawal(form);}
 });
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMenu();});
 $$('dialog').forEach(dialog=>{

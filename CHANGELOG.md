@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## 2026-11-25 — Work : intégration finale du contrat v1.3 (PR nº 2)
+
+- Contre-revue du SHA Claude `aab5270` : les quatre corrections précédentes sont confirmées par lecture et tests indépendants. Deux nouveaux défauts reproduits, e-mail de confirmation perdu après échec d'outbox et version CGV sans archive ; corrections proposées à Claude dans `docs/REVUE-V1-3-WORK.md`.
+- Boutique : CGV versionnées, reprise des tentatives v1.2/v1.3, états terminaux, adresses relais complètes, suivi sécurisé par jeton en mémoire, formulaires contact/retour/rétractation et gestion des réponses incertaines. Aucun backend ou STUDIO concurrent.
+- Configuration de build Cloudflare TEST fermée et séparée, headers statiques et limitation des Pages Functions à `/api/*`. Aucun déploiement Cloudflare ni activation Stripe.
+- 172 tests réussis, 13 assertions commerciales ; deux nouvelles régressions explicitement en échec dans `test:review:v13`. Compilation statique/Cloudflare réussie. SimpleWebAuthn installé et vérifié isolément sous Node et workerd local, sans modifier les dépendances de Claude.
+- Revue visuelle boutique/STUDIO à 390 et 1440 px, devis locaux 79,90 €/83,50 €, captures de recette. Charte et maquette conservées. L'aperçu privé reste fermé, sans stock simulé publié ; les services externes et le vrai iPhone ne sont pas validés.
+
 ## 2026-11-25 (midi) — Claude : assistant de l’environnement de test et préparation de l’iPhone (PR n° 1)
 
 Le fondateur valide la préparation de l’environnement de test Cloudflare gratuit et isolé. Il confirme que les codes promo ne sont pas prioritaires pour le DROP 01 et que la purge automatique reste coupée.

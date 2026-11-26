@@ -37,6 +37,7 @@ function harness() {
   const quote = {
     id: 'signed-test-only',
     currency: 'EUR',
+    terms_version: 'test',
     items: [{ sku: 'ZH-PINK-M', quantity: 1, unit_price_cents: 7500, line_total_cents: 7500 }],
     shipping: 'home',
     relay: null,
@@ -259,4 +260,52 @@ test('une reprise qui réclame une nouvelle vérification conserve sa clé et ut
   assert.equal(new Set(h.calls.map((c) => c.o.idempotencyKey)).size, 1);
   assert.equal(h.calls.at(-1).i.turnstile, 'nouveau-jeton');
   assert.equal(h.calls.at(-1).o.retry, false);
+});
+
+test('v1.3 : tentative payée, à vérifier ou en traitement conservée ; jamais transformée en nouvel achat', async () => {
+  for (const status of ['paid', 'review', 'processing', 'pending', 'refunded']) {
+    const h = harness(); await h.ready();
+    h.setError(new contract.ApiError('service_unavailable'));
+    await assert.rejects(h.flow.submit({ termsVersion: 'test', turnstile: 'fixture' }));
+    h.setError(new contract.ApiError('attempt_closed', 409, { order_reference: 'SL-TEST-TEST', payment_status: status, session_id: 'cs_test_fixture' }));
+    await assert.rejects(h.flow.submit());
+    assert.equal(h.flow.state.closed.payment_status, status);
+    assert.equal(h.flow.state.attempt.order_reference, 'SL-TEST-TEST');
+    assert.equal(h.flow.state.phase, 'closed');
+    assert.throws(() => h.flow.select(input), e => e.code === 'attempt_pending');
+  }
+});
+test('v1.3 : seules une expiration ou un échec explicites autorisent un nouveau devis', async () => {
+  for (const status of ['expired', 'failed']) {
+    const h = harness(); await h.ready();
+    h.setError(new contract.ApiError('attempt_closed', 409, { order_reference: 'SL-TEST-TEST', payment_status: status }));
+    await assert.rejects(h.flow.submit({ termsVersion: 'test', turnstile: 'fixture' }));
+    assert.equal(h.flow.state.attempt, null); assert.equal(h.flow.state.quote, null); assert.equal(h.flow.state.accepted, false);
+  }
+});
+test('v1.3 : réponse de clôture incomplète conserve la tentative par prudence', async () => {
+  const h = harness(); await h.ready(); h.setError(new contract.ApiError('attempt_closed', 409, {}));
+  await assert.rejects(h.flow.submit({ termsVersion: 'test', turnstile: 'fixture' }));
+  assert.ok(h.flow.state.attempt); assert.equal(h.flow.state.phase, 'uncertain');
+});
+test('v1.3 : reprise après onze minutes avec la même clé et les CGV initiales, même si les CGV changent', async () => {
+  const h = harness(); await h.ready(); h.setError(new contract.ApiError('service_unavailable'));
+  await assert.rejects(h.flow.submit({ termsVersion: 'test', turnstile: 'fixture' }));
+  h.clock.t += 660000; h.setError(null);
+  await h.flow.submit({ termsVersion: 'nouvelle-version' });
+  assert.equal(h.calls[1].i.terms_version, 'test'); assert.equal(h.calls[0].o.idempotencyKey, h.calls[1].o.idempotencyKey);
+});
+test('v1.3 : les anciennes tentatives v1.2 restent récupérables sans devenir de nouveaux devis', async () => {
+  const h = harness(); await h.ready(); h.setError(new contract.ApiError('service_unavailable'));
+  await assert.rejects(h.flow.submit({ termsVersion: 'test', turnstile: 'fixture' }));
+  const a = JSON.parse(h.saved.get(flowApi.STORAGE_KEY)); delete a.quote.terms_version;
+  h.saved.set(flowApi.STORAGE_KEY, JSON.stringify(a));
+  const restored = flowApi.createFlow(h.options);
+  assert.equal(restored.state.attempt.key, a.key); assert.equal(restored.state.quote.terms_version, 'test');
+});
+test('v1.3 : devis sans version des CGV ou relais incomplet refusé', async () => {
+  const h = harness(); delete h.quote.terms_version; h.flow.select(input);
+  await assert.rejects(h.flow.quote(), e => e.code === 'invalid_quote');
+  const relay = { ...h.quote, terms_version: 'test', shipping: 'relay', relay: { id: 'test-only', label: 'RELAIS DE TEST' } };
+  assert.equal(contract.validQuote(relay, { ...input, shipping: 'relay', relay_id: 'test-only' }), false);
 });

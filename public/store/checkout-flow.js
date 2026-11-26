@@ -53,7 +53,9 @@
       )
         return null;
       // Un devis expiré peut appartenir à une tentative non résolue. Il n'autorise jamais un nouvel achat.
-      if (!contract.validQuote(a.quote, a.input, 0)) return null;
+      // Une tentative v1.2 déjà envoyée garde son consentement initial, sans devenir un nouveau devis.
+      if (a.quote && !a.quote.terms_version) a.quote.terms_version = a.input.terms_version;
+      if (!contract.validQuote(a.quote, a.input, 0, { legacyAttempt: true }) || a.quote.terms_version !== a.input.terms_version) return null;
       return a;
     } catch {
       return null;
@@ -77,6 +79,7 @@
       retryAt: 0,
       attempt: readAttempt(storage, contract),
       needsChallenge: false,
+      closed: null,
     };
     let pending = null;
     let generation = 0;
@@ -151,7 +154,7 @@
             items: state.selection.items.map(({ sku, quantity }) => ({ sku, quantity })),
             shipping: state.selection.shipping,
             relay_id: state.selection.shipping === 'relay' ? state.selection.relay_id : null,
-            terms_version: termsVersion,
+            terms_version: state.quote.terms_version,
           };
           state.attempt = { key: newKey(), input, quote: state.quote };
           persist();
@@ -176,7 +179,16 @@
         state.error = e;
         const defaultWait = { checkout_in_progress: 2000, hold_limit: 30000, rate_limited: 30000 };
         state.retryAt = now() + (e.retryAfterMs || defaultWait[e.code] || 0);
-        if ((!retry && refusals.has(e.code)) || e.code === 'attempt_closed') {
+        if (e.code === 'attempt_closed') {
+          const d = e.details;
+          if (contract.orderRef.test(d?.order_reference || '') && contract.paymentStates.includes(d.payment_status)) {
+            state.closed = { order_reference: d.order_reference, payment_status: d.payment_status,
+              session_id: /^cs_[A-Za-z0-9_]+$/.test(d.session_id || '') ? d.session_id : null };
+            if (state.attempt) state.attempt.order_reference = d.order_reference;
+            if (['expired', 'failed'].includes(d.payment_status)) clearConfirmed();
+            else { state.phase = 'closed'; persist(); }
+          } else state.phase = 'uncertain';
+        } else if (!retry && refusals.has(e.code)) {
           clearConfirmed();
         } else {
           state.phase = state.attempt ? 'uncertain' : 'review';
@@ -190,6 +202,11 @@
       if (now() < state.retryAt) return Promise.reject(error('rate_limited'));
       const retry = Boolean(state.attempt);
       if (!retry && (!state.accepted || !termsVersion)) return Promise.reject(error('terms_required'));
+      if (!retry && termsVersion !== state.quote?.terms_version) {
+        clearConfirmed();
+        state.error = error('terms_outdated');
+        return Promise.reject(state.error);
+      }
       if ((!retry || state.needsChallenge) && !turnstile) return Promise.reject(error('challenge_required'));
       if (!retry && (!state.quote || Date.parse(state.quote.expires_at) <= now())) {
         clearConfirmed();
