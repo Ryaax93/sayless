@@ -408,8 +408,13 @@ test('R15 V13-B2 CGV : devis et réservation exigent le document archivé ; publ
   assert.deepEqual([raced.status, raced.body.error], [409, 'terms_outdated']);
   assert.equal(await b.count("SELECT COUNT(*) FROM orders WHERE idempotency_key = 'course-cgv-concurrente-0001'"), 0, 'lot entier annulé');
   // Version citée sans document : aucun devis, aucune commande, aucune réservation (contrôles SQL).
+  const before = await b.quote([{ sku: 'TEST-M', quantity: 1 }], { ip: '10.215.0.4' });
   await b.real.prepare("UPDATE settings SET value = 'version-sans-document' WHERE key = 'terms_version'").run();
   assert.equal((await b.quote([{ sku: 'TEST-M', quantity: 1 }])).body.error, 'not_configured');
+  // Paiement d'un devis signé avant le changement : nouveau consentement demandé (409), rien de créé.
+  const stale = await b.checkout('TEST-M', '10.215.0.4', { quote: before, key: 'cgv-changees-sans-document-01' });
+  assert.deepEqual([stale.status, stale.body.error], [409, 'terms_outdated']);
+  assert.equal(await b.count("SELECT COUNT(*) FROM orders WHERE idempotency_key = 'cgv-changees-sans-document-01'"), 0);
   const t = b.clock.now();
   await assert.rejects(b.real.prepare(`INSERT INTO orders (id, reference, source, status, subtotal_cents, shipping_cents, total_cents, terms_version, created_at, updated_at)
     VALUES ('o-fantome', 'SL-FANT-0001', 'storefront', 'pending', 7500, 0, 7500, 'version-sans-document', ?, ?)`).bind(t, t).run(), /terms_unpublished/);

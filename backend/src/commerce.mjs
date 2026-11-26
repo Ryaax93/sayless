@@ -220,8 +220,11 @@ export async function startCheckout(env, input, deps) {
   if (!(quote.exp > now)) throw fail('quote_expired');
   const sameItems = JSON.stringify(items.map((i) => [i.sku, i.quantity])) === JSON.stringify(quote.items.map(([s, q]) => [s, q]));
   if (!sameItems || body.shipping !== quote.shipping || (relayId ?? null) !== (quote.relay?.id ?? null)) throw fail('quote_mismatch');
-  // CGV : document archivé en vigueur, même version et même empreinte que le devis (et que le
-  // document affiché, si le client l'indique). La base refait ce contrôle au moment de réserver.
+  // CGV : le consentement doit porter sur la version en vigueur (sinon nouveau consentement, 409),
+  // dont le texte archivé doit être intact (sinon aucune vente, 503), avec la même empreinte que le
+  // devis et que le document affiché si le client l'indique. La base refait ces contrôles en réservant.
+  const current = settings.terms_version || '';
+  if (current && (body.terms_version !== current || quote.t !== current)) throw fail('terms_outdated');
   const terms = await termsDocument(db).catch(() => { throw fail('service_unavailable'); });
   if (!terms?.intact) throw fail('not_configured');
   if (body.terms_version !== terms.version || quote.t !== terms.version || (quote.h !== undefined && quote.h !== terms.sha256)
