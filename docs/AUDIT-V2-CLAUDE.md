@@ -158,9 +158,54 @@ Limites :
 | Suivi, contact, rétractation | Routes raccordées ; actives quand l’envoi d’e-mails est configuré, sinon refus explicite (U08, C04) |
 | Purge automatique | Coupée, en attente de la validation des durées par le fondateur |
 
-## 12. Risques et limites restants
+## 12. Mission corrective du 26 novembre 2026 (contre-revue v1.3 de Work)
+
+### V13-B1 : e-mail de confirmation perdu
+
+Avant : la vente était validée, puis la confirmation mise en file à part ; une panne entre les deux perdait l’e-mail pour toujours (le renvoi du webhook ne refaisait rien, la commande étant déjà payée). Même faiblesse pour l’accusé des demandes et l’avis d’expédition.
+
+Après : une **intention durable** (`mail_intents`, migration 0007) est écrite dans le **même lot** que l’événement, sans donnée personnelle (référence seulement). La mise en file vient ensuite ; si elle échoue, l’intention attend et elle est reprise par le renvoi du webhook, l’action liée et la tâche planifiée (essais espacés de 1 min à 1 h, alerte critique au 5e). Clé unique : jamais de doublon. Commande remboursée entre-temps : rien n’est envoyé. Santé de STUDIO en alerte tant qu’un e-mail attend plus de 10 minutes.
+
+Tests : R11 (panne de file, renvois, nouvel événement, passages simultanés : une seule confirmation), R12 (8 webhooks simultanés, aucune adresse en clair, aucune confirmation tardive si l’envoi a été configuré après la vente), R13 (accusé des demandes), R14 (alerte au 5e essai, remboursement), U10 (avis d’expédition).
+
+### V13-B2 : CGV non archivées
+
+Devis et réservation exigent le texte archivé de la version en vigueur, avec son empreinte vérifiée. La base refuse aussi, au dernier verrou : une commande qui cite une version absente de l’archive (`orders_terms_archived`) ; une réservation si les CGV en vigueur manquent à l’archive (`terms_unpublished`) ou si la commande cite une autre version ou empreinte (`terms_outdated`). Une publication concurrente pendant le paiement est refusée sans commande créée. Reprise d’une tentative existante préservée. Tests R15.
+
+### V13-C1 : texte des CGV
+
+Source unique : la table `terms_documents` (version, texte, empreinte SHA-256, date). Route publique en lecture seule `GET /api/terms[/<version>]` : texte brut, empreinte recalculée à chaque lecture (texte altéré jamais servi : 503 et alerte critique), ETag, cache immuable pour une version précise. Le devis signe version **et** empreinte, et renvoie `terms_sha256` et `terms_url` ; le paiement vérifie `terms_sha256` s’il est fourni. Contrat v1.4 pour Work. Tests R16.
+
+### Échecs sous Windows : cause environnementale, corrigée
+
+| Mesure | Version 397bb43 (Miniflare 4) | Version corrigée (Miniflare 5, lots) |
+| --- | --- | --- |
+| Connexions TCP locales pour la suite backend | 27 654 | environ 2 800 |
+| Linux, ports limités comme Windows (8 192, sans réutilisation TIME_WAIT) | 70 réussis, 16 en échec (« fetch failed ») | 93/93, aucun échec |
+| Pic de connexions en TIME_WAIT | 8 177 | 2 016 |
+
+Cause : Miniflare 4 ouvre une connexion TCP locale par requête SQL ; Windows (16 384 ports, TIME_WAIT d’environ 120 s, pas de réutilisation) les épuise, d’où EADDRINUSE, « fetch failed » et, dans t02, 0 réservation au lieu de 26 (toutes les requêtes échouaient avant d’atteindre la base). Aucune erreur fonctionnelle : la même suite passe sous Linux. Correction : outils Cloudflare à jour (Miniflare 5 réutilise ses connexions) et migrations de test en lots. Charge et assertions inchangées ; diagnostic ajouté (échecs de connexion comptés, répartition des réponses dans t01 et t02). CI Linux et Windows (GitHub Actions) ajoutée ; un premier passage sur Windows avec l’ancienne version avait reproduit un échec intermittent de t01.
+
+### Limites de l’offre gratuite Cloudflare (trouvé pendant la mission)
+
+| Invocation | Avant | Après (mesuré par les tests) |
+| --- | --- | --- |
+| Tâche planifiée après l’ouverture d’un drop (25 paniers expirés, 3 ventes, 4 accusés en attente, 30 alertes, rapport dû) | 115 requêtes D1, 65 appels externes : interrompue par Cloudflare (limites de 50) | 44 à 47 requêtes et 4 à 26 appels par minute ; arriéré traité en 10 minutes, rien perdu ni doublé (R17) |
+| Webhook de la dernière pièce (fin du drop, e-mails en attente) | non mesuré | 32 requêtes (R18) |
+| STUDIO, relecture de 20 ventes 1.0 | environ 156 requêtes : en échec | lots de 5 ventes, 39 requêtes chacun, relance automatique (U11) |
+| Écrans de STUDIO (données d’un drop complet) | — | 3 à 22 requêtes |
+
+`backend/src/budget.mjs` compte les requêtes D1 et les appels externes de la tâche planifiée, du webhook Stripe et de STUDIO ; chaque tâche ne commence une unité de travail que si son pire coût mesuré tient dans le reste ; 2 requêtes restent gardées pour le battement. Les pires coûts par unité sont vérifiés par R18.
+
+### Audit npm et WebAuthn
+
+- Audit : 33 → 27 par la mise à jour des outils Cloudflare ; les 27 restantes sont dans l’ancien gabarit Next/vinext et ses outils, rien dans le code déployé. Proposition à Work : `DEPENDANCES.md`.
+- WebAuthn : `@simplewebauthn/server` 14.1.0 retenue après comparaison sur 46 cas (W01) et essai dans workerd sans `nodejs_compat`. Un seul écart : la bibliothèque accepte les réponses venues d’une autre origine, que SAYLESS refuse et continuera de refuser. Non intégrée avant l’accord de Work et du fondateur : `WEBAUTHN-BIBLIOTHEQUE.md`.
+
+## 13. Risques et limites restants
 
 - Rien n’a été essayé sur Cloudflare réel, Stripe en mode test réel, Resend réel, un vrai iPhone (Safari, VoiceOver, notifications), ni avec un transporteur : procédure prête dans `docs/CLOUDFLARE-TEST.md`, à lancer avec l’accord du fondateur.
-- Offre gratuite : 10 ms de calcul par exécution planifiée. La sauvegarde a sa propre minute ; sa durée réelle est à mesurer dans l’environnement de test.
+- Offre gratuite : requêtes D1 et appels externes désormais comptés et bornés (section 12) ; les 10 ms de calcul par invocation ne se mesurent pas en local : à relever dans les métriques du Worker de test. La sauvegarde a sa propre minute.
+- Windows : correction prouvée sous Linux avec des ports limités comme Windows et par la CI ; à confirmer sur le PC du fondateur.
 - Le lien de paiement 1.0 affiche les moyens de paiement dynamiques du compte (Klarna possible) : décision du fondateur, rien n’a été modifié dans Stripe.
 - À saisir par le fondateur dans STUDIO : identifiants du lien 1.0, investissement, quantités reçues et offertes, inventaire physique, CGV.

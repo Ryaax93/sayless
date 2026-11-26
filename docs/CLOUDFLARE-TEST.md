@@ -107,6 +107,28 @@ node scripts/test-env.mjs
 
 Les secrets déjà envoyés ne sont jamais remplacés ; seules les nouvelles migrations sont appliquées.
 
+## Recette de la version corrective du 26 novembre (paiements fermés)
+
+**Seulement après ton accord**, une fois les étapes 1 à 7 faites. Cette recette ne crée aucune ressource nouvelle, n’ouvre aucun paiement et ne touche ni au domaine, ni au DNS, ni à Stripe réel, ni à la boutique publique.
+
+1. Mettre l’environnement de test à jour avec la branche de vérification (la migration 0007 s’applique seule) :
+   ```bat
+   cd %USERPROFILE%\sayless
+   git fetch origin
+   git checkout claude/verification-v2
+   git pull
+   npm ci
+   node scripts/test-env.mjs
+   ```
+   Attendu : toutes les étapes « OK », puis `node scripts/test-env.mjs etat` sans erreur.
+2. **Paiements fermés** : STUDIO → Plus → Santé du site. Attendu : « Boutique 2.0 : en pause (aucun paiement possible) » et « Paiement Stripe : clés à saisir ». Aucune clé Stripe n’est demandée dans cette recette.
+3. **Tâche de chaque minute** : deux minutes après la mise à jour, « Tâches automatiques : OK » et « File d’envoi : OK ». Si un e-mail client attendait, la ligne passe en alerte puis revient à OK toute seule.
+4. **Limites de l’offre gratuite** : tableau de bord Cloudflare → Workers & Pages → `sayless-ops-test` → Métriques. Relève, sur 24 heures, le nombre d’erreurs (attendu : 0) et le **temps de calcul** médian et maximal (limite gratuite : 10 ms par exécution). Envoie-moi ces chiffres : ils ne contiennent aucun secret. C’est la seule mesure qu’on ne peut pas faire sur un ordinateur.
+5. **CGV** : STUDIO → Réglages → CGV → publie une version de test (texte marqué « TEST — document non contractuel »). Attendu dans Santé : « CGV publiées », avec le début de leur empreinte. Une version publiée ne peut plus être modifiée : publie seulement un texte de test.
+6. **Ventes 1.0 (facultatif, avec une clé Stripe de test seulement)** : Réglages → « Relire les ventes du lien 1.0 ». STUDIO enchaîne seul les lots ; attendu : un message unique avec le total relu.
+
+**Pas couvert ici** (il faut la boutique de test et Stripe en mode test, étape suivante, sur ton accord) : confirmation de commande reçue après un paiement de test, route publique `/api/terms` affichée par la boutique, refus d’un paiement si les CGV changent pendant l’achat.
+
 ## Sauvegardes : vérifier qu’elles se relisent (une fois par mois)
 
 1. STUDIO → Santé du site → Sauvegardes chiffrées → Télécharger.
