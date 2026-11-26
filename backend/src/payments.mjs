@@ -3,10 +3,12 @@
 // et import des ventes passées. Un remboursement ne remet jamais une pièce en stock.
 import { all, audit, batch, fail, getSettings, newReference, one, sql, uuid } from './lib.mjs';
 import { emailHash, sealContact } from './security.mjs';
-import { orderConfirmationEmail, queueEmail } from './email.mjs';
+import { emailReady, validEmail } from './email.mjs';
+import { intentStatement, processMailIntents } from './intents.mjs';
 import { assertZone, orderItems, releaseStatements, validSession } from './commerce.mjs';
 import { sessionParams, verifyStripeSignature } from './stripe.mjs';
 import { afterSale } from './notify.mjs';
+import { COST, fits } from './budget.mjs';
 
 // Produit vendu par l'ancien lien 1.0 : déduit de la table de correspondance, jamais supposé.
 const LEGACY_PRODUCT = '(SELECT v.product_id FROM legacy_link_sizes l JOIN variants v ON v.sku = l.sku ORDER BY l.value LIMIT 1)';
@@ -19,7 +21,10 @@ export async function handleStripeWebhook(env, raw, signature, deps) {
   const now = deps.now();
   if (!deps.stripe) throw fail('not_configured');
   const event = await verifyStripeSignature(raw, signature, env.STRIPE_WEBHOOK_SECRET, now, deps.stripe.live);
-  if (await one(db, 'SELECT 1 AS seen FROM processed_events WHERE event_id = ?', event.id)) return { duplicate: true };
+  if (await one(db, 'SELECT 1 AS seen FROM processed_events WHERE event_id = ?', event.id)) {
+    await processMailIntents(env, deps, { limit: 2 }); // renvoi : occasion de reprendre un e-mail en attente
+    return { duplicate: true };
+  }
   const object = event.data?.object ?? {};
   if (SESSION_EVENTS.has(event.type)) {
     const session = await deps.stripe.retrieveSession(object.id); // l'état réel fait foi, jamais l'événement
@@ -33,6 +38,7 @@ export async function handleStripeWebhook(env, raw, signature, deps) {
   }
   await batch(db, [sql(db, `INSERT INTO processed_events (event_id, type, at) VALUES (?, ?, ?)
     ON CONFLICT (event_id) DO NOTHING`, event.id, event.type, now)]);
+  await processMailIntents(env, deps, { limit: 2 });
   return { processed: true };
 }
 
@@ -138,6 +144,10 @@ async function confirmSale(env, order, session, deps) {
   const sealed = await sealContact(env, contact, order.id);
   const zoneProblem = await outOfZone(db, order, contact);
   const reviewReason = zoneProblem ? 'address_out_of_zone' : !sealed ? 'contact_not_sealed' : null;
+  // Confirmation au client : intention durable écrite avec la vente (V13-B1), seulement si l'adresse
+  // est enregistrée chiffrée et l'envoi configuré. Mise en file ensuite, reprise en cas de panne.
+  const confirmation = `order_confirmation:${order.id}`;
+  const wantsConfirmation = Boolean(sealed && validEmail(contact.email) && emailReady(env) && env.PUBLIC_ORIGIN);
   // Les pièces ne sont attribuées qu'une fois, tant que la commande n'est pas déjà tranchée :
   // un renvoi d'événement après une remise en stock ne décompte jamais une seconde fois.
   const open = `(SELECT status FROM orders WHERE id = ?) IN ('pending', 'awaiting_payment', 'expired', 'failed')`;
@@ -165,6 +175,9 @@ async function confirmSale(env, order, session, deps) {
       WHERE id = ? AND paid_at = ? AND ? IS NOT NULL`, reviewReason, now, order.id, now, reviewReason),
     sql(db, `UPDATE orders SET status = 'review', updated_at = ? WHERE id = ? AND status = 'paid' AND ? IS NOT NULL
       AND paid_at = ?`, now, order.id, reviewReason, now),
+    ...(wantsConfirmation ? [intentStatement(db, { kind: 'order_confirmation', dedupe: confirmation, ref: order.id, now,
+      when: `EXISTS (SELECT 1 FROM orders WHERE id = ? AND paid_at = ? AND status IN ('paid', 'paid_no_stock', 'review'))`,
+      params: [order.id, now] })] : []),
   ]);
   const after = await one(db, 'SELECT status, paid_at FROM orders WHERE id = ?', order.id);
   const justPaid = after.paid_at === now;
@@ -183,12 +196,9 @@ async function confirmSale(env, order, session, deps) {
   } else if (after.status === 'review' && justPaid) {
     await afterSale(env, order.id, deps, { announce: false });
   }
-  // Confirmation au client (une seule fois), dès que l'envoi d'e-mails est configuré.
-  if (justPaid && ['paid', 'review', 'paid_no_stock'].includes(after.status) && contact.email && env.PUBLIC_ORIGIN) {
-    const fresh = await one(db, 'SELECT * FROM orders WHERE id = ?', order.id);
-    await queueEmail(env, { dedupe: `order_confirmation:${order.id}`, to: contact.email,
-      ...orderConfirmationEmail({ order: fresh, items: await orderItems(db, order.id), origin: env.PUBLIC_ORIGIN }) }, now).catch(() => {});
-  }
+  // Mise en file de la confirmation, à chaque passage (premier webhook, renvoi, autre événement) :
+  // sans effet si elle est déjà en file ; une panne laisse l'intention en attente, jamais perdue.
+  await processMailIntents(env, deps, { only: confirmation });
   return { status: after.status };
 }
 
@@ -353,7 +363,11 @@ export async function sweep(env, deps, limit = 20) {
     ORDER BY created_at LIMIT ?`, now, limit);
   let released = 0;
   let recovered = 0;
+  let checked = 0;
   for (const order of rows) {
+    // Invocation comptée : chaque commande peut aller jusqu'au rattrapage d'une vente (pire cas).
+    if (!fits(deps, COST.sweepOrder)) break; // commandes restantes à la minute suivante
+    checked += 1;
     try {
       const running = order.expires_at > now;
       let sid = order.stripe_session_id;
@@ -402,7 +416,7 @@ export async function sweep(env, deps, limit = 20) {
       // Base ou Stripe indisponible pour cette commande : nouvel essai à la minute suivante.
     }
   }
-  return { released, checked: rows.length, recovered };
+  return { released, checked, recovered };
 }
 
 // Import des ventes passées (saisies par le fondateur dans STUDIO, jamais versionnées).

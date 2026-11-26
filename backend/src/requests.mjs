@@ -3,7 +3,8 @@
 // des coordonnées. Sans eux, ces routes répondent 503 not_configured : jamais de faux « envoyé ».
 import { audit, b64url, batch, fail, hmacB64, iso, one, all, randomCode, sql, timingSafeEqual, uuid } from './lib.mjs';
 import { emailHash, piiReady, sealPayload } from './security.mjs';
-import { emailReady, lookupEmail, queueEmail, requestAckEmail, validEmail } from './email.mjs';
+import { emailReady, lookupEmail, queueEmail, validEmail } from './email.mjs';
+import { intentStatement, processMailIntents } from './intents.mjs';
 import { PUBLIC_STATUS } from './commerce.mjs';
 
 const TYPES = new Set(['contact', 'return', 'withdrawal']);
@@ -34,17 +35,21 @@ export async function submitRequest(env, body, deps, { ip }) {
   const request = { id, reference: `R-${randomCode(4)}-${randomCode(4)}`, type, order_reference: orderReference };
   const sealed = await sealPayload(env, { name, email, message }, `request:${id}`);
   if (!sealed) throw fail('not_configured');
+  const dedupe = `request_ack:${id}`;
+  // Demande et intention d'accusé dans la même transaction (V13-B1) : l'accusé ne peut plus être
+  // perdu entre l'enregistrement de la demande et sa mise en file.
   await batch(env.db, [
     sql(env.db, `INSERT INTO customer_requests (id, reference, type, order_reference, sealed, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`, id, request.reference, type, orderReference, sealed, now, now),
+    intentStatement(env.db, { kind: 'request_ack', dedupe, ref: id, now }),
     audit(env.db, now, 'client', 'request_received', request.reference, type),
   ]);
   const titles = { contact: 'Nouveau message client', return: 'Demande de retour', withdrawal: 'Demande de rétractation' };
   await deps.notify({ kind: `request_${type}`, ref: request.reference, level: type === 'withdrawal' ? 'warning' : 'info', title: titles[type],
     body: `Demande ${request.reference}${orderReference ? ` (commande ${orderReference})` : ''}. À traiter dans STUDIO.` });
-  const dedupe = `request_ack:${id}`;
-  await queueEmail(env, { dedupe, to: email, ...requestAckEmail({ request, receivedAt: now }) }, now);
-  // Accusé envoyé tout de suite ; en cas d'échec, la file réessaie à la minute suivante.
+  // Accusé mis en file puis envoyé tout de suite ; en cas d'échec, l'intention ou la file
+  // réessaient à la minute suivante. La demande est enregistrée dans tous les cas.
+  await processMailIntents(env, deps, { only: dedupe });
   if (deps.sendNow) await deps.sendNow(`email:${dedupe}`).catch(() => {});
   return { reference: request.reference, type, received_at: iso(now) };
 }

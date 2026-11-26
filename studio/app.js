@@ -910,7 +910,18 @@ const actions = {
   'threshold-save': () => sensitive(async () => { set({ data: { ...state.data, settings: await api('/api/admin/settings', { low_stock_threshold: state.form.threshold }) }, form: {}, notice: 'Seuil enregistré.' }); }),
   'legacy-save': () => { const body = { legacy_payment_link_id: value('legacy-link'), legacy_link_price_id: value('legacy-price') };
     return sensitive(async () => { set({ data: { ...state.data, settings: await api('/api/admin/settings', body) }, notice: 'Lien 1.0 enregistré.' }); }); },
-  'legacy-sync': () => sensitive(async () => { const r = await api('/api/admin/legacy/sync', {}); set({ notice: `${plural(r.checked, 'vente')} relue(s), ${r.recorded} nouvelle(s), ${r.duplicates} déjà connue(s).${r.next ? ' D’autres ventes restent : relance la lecture.' : ''}` }); }),
+  // Lecture par lots : chaque appel reste dans les limites de l'offre gratuite et indique où reprendre.
+  'legacy-sync': () => sensitive(async () => {
+    const total = { checked: 0, recorded: 0, duplicates: 0 };
+    let after = null;
+    for (let round = 0; round < 25; round += 1) {
+      const r = await api('/api/admin/legacy/sync', after ? { after } : {});
+      total.checked += r.checked; total.recorded += r.recorded; total.duplicates += r.duplicates;
+      after = r.next;
+      if (!after) break;
+    }
+    set({ notice: `${plural(total.checked, 'vente')} relue(s), ${total.recorded} nouvelle(s), ${total.duplicates} déjà connue(s).${after ? ' D’autres ventes restent : relance la lecture.' : ''}` });
+  }),
   'terms-publish': () => { const body = { version: value('terms-version'), body: app.querySelector('#terms-body')?.value ?? '' };
     if (!window.confirm(`Publier la version ${body.version} des CGV ? Elle s’appliquera aux prochaines commandes et ne pourra plus être modifiée.`)) return undefined;
     return sensitive(async () => { await api('/api/admin/terms', body); await load('settings'); set({ notice: 'CGV publiées.' }); }); },

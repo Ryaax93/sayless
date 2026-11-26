@@ -6,13 +6,15 @@ import { all, audit, batch, fail, getSettings, iso, json, one, pad4, sql } from 
 import { piiReady, openPayload, readJson } from './security.mjs';
 import { adjustStock, invariants, recordInventory } from './stock.mjs';
 import { stripeMode, stripeReady } from './stripe.mjs';
-import { currentTerms, publishTerms } from './terms.mjs';
+import { currentTerms, publishTerms, termsDocument } from './terms.mjs';
 import { exportRecettes, csvSafe, inspectReturn, viewContact } from './operations.mjs';
 import { legacyReviewText, recordLegacyLinkSale } from './payments.mjs';
 import { configuredChannels } from './notify.mjs';
-import { emailReady, queueEmail, shippedEmail } from './email.mjs';
+import { emailReady } from './email.mjs';
+import { intentStatement, pendingIntents, processMailIntents } from './intents.mjs';
 import { pushReady, validSubscription } from './push.mjs';
 import { listBackups } from './backup.mjs';
+import { COST, fits } from './budget.mjs';
 
 const DEFAULT_REFERENCE_TOTAL = 26; // déclaration théorique du DROP 01, jamais imposée au stock
 const PAID_LIKE = `('paid', 'paid_no_stock', 'review', 'partially_refunded', 'refunded')`;
@@ -103,12 +105,13 @@ export async function readiness(ctx, deps) {
     LEFT JOIN inventory i ON i.sku = v.sku WHERE p.status = 'published' AND (i.sku IS NULL OR i.confirmed_at IS NULL)`)).n;
   const published = (await one(ctx.db, `SELECT COUNT(*) AS n FROM products WHERE status = 'published'`)).n;
   const rates = (await one(ctx.db, 'SELECT COUNT(*) AS n FROM shipping_rates')).n;
-  const terms = await currentTerms(ctx.db);
+  const terms = await termsDocument(ctx.db);
   const production = ctx.ENVIRONMENT === 'production';
   const turnstile = Boolean(ctx.TURNSTILE_SECRET) || (!production && ctx.TURNSTILE_BYPASS === 'test-only');
   const checks = [
     { id: 'inventory', ok: published > 0 && unverified === 0, blocker: true, text: published ? (unverified ? `${unverified} taille(s) sans inventaire confirmé` : 'Inventaire confirmé pour toutes les tailles en ligne') : 'Aucun produit en ligne' },
-    { id: 'terms', ok: Boolean(terms?.archived), blocker: true, text: terms?.archived ? `CGV ${terms.version} publiées` : 'CGV à publier (version et texte)' },
+    { id: 'terms', ok: Boolean(terms?.intact), blocker: true, text: terms?.intact ? `CGV ${terms.version} publiées (empreinte ${terms.sha256.slice(0, 8)})`
+      : terms ? `CGV ${terms.version} : texte différent de son empreinte` : 'CGV à publier (version et texte)' },
     { id: 'pii', ok: await piiReady(ctx), blocker: true, text: (await piiReady(ctx)) ? 'Chiffrement des coordonnées actif' : 'Clé de chiffrement des coordonnées à saisir' },
     { id: 'stripe', ok: stripeReady(ctx), blocker: true, text: stripeReady(ctx) ? `Stripe en mode ${stripeMode(ctx) === 'live' ? 'réel' : 'test'}` : 'Clés Stripe et secret du webhook à saisir (mode adapté à l’environnement)' },
     { id: 'turnstile', ok: turnstile, blocker: true, text: ctx.TURNSTILE_SECRET ? 'Contrôle anti-abus actif' : turnstile ? 'Contrôle anti-abus simulé (test uniquement)' : 'Clé Turnstile à saisir' },
@@ -402,6 +405,7 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       const lastEvent = (await one(ctx.db, 'SELECT MAX(at) AS t FROM processed_events')).t;
       const dead = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead'`)).n;
       const queued = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status IN ('pending', 'sending')`)).n;
+      const stuck = await pendingIntents(ctx.db, now); // e-mails clients pas encore mis en file depuis 10 min
       const cron = Number(settings.cron_last_run || 0);
       const backups = ctx.BACKUPS ? await listBackups(ctx.BACKUPS).catch(() => null) : null;
       const verified = Number(settings.backup_last_verified_at || 0);
@@ -414,7 +418,8 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         { name: 'Notifications Discord', state: configuredChannels(ctx).includes('discord') ? 'ok' : 'todo', detail: configuredChannels(ctx).includes('discord') ? 'Webhook configuré' : 'Webhook de salon privé à saisir' },
         { name: 'Notifications iPhone', state: pushReady(ctx) ? 'ok' : 'todo', detail: pushReady(ctx) ? 'Clés configurées' : 'Clés VAPID à saisir' },
         { name: 'E-mails clients', state: emailReady(ctx) ? 'ok' : 'todo', detail: emailReady(ctx) ? `Expéditeur ${ctx.EMAIL_FROM}` : 'Resend et domaine vérifié à configurer' },
-        { name: 'File d’envoi', state: dead ? 'alert' : 'ok', detail: dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente` },
+        { name: 'File d’envoi', state: dead || stuck ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente`,
+          ...(stuck ? [`${stuck} e-mail(s) client à mettre en file (nouvel essai automatique)`] : [])].join(' ; ') },
         backupCheck({ error: settings.backup_last_error, verified, now, configured: Boolean(ctx.BACKUPS && ctx.BACKUP_PUBLIC_KEY), kept: backups?.length ?? null }),
         { name: 'Conservation des données', state: settings.retention_enabled === '1' ? 'ok' : 'wait', detail: settings.retention_enabled === '1' ? 'Purge automatique active' : 'Purge coupée, en attente de ta validation des durées' },
       ];
@@ -490,14 +495,21 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       requireStepUp();
       if (!deps.stripe?.listLinkSessions || !settings.legacy_payment_link_id) throw fail('not_configured');
       const page = await deps.stripe.listLinkSessions(settings.legacy_payment_link_id, typeof body.after === 'string' ? body.after : null);
+      const sessions = (page.data ?? []).slice(0, 20);
       const results = [];
-      for (const s of (page.data ?? []).slice(0, 20)) {
+      for (const s of sessions) {
+        // Offre gratuite : on s'arrête avant la limite de l'invocation (journal compris) ; STUDIO
+        // relance aussitôt la lecture à partir de la dernière vente traitée.
+        if (!fits(deps, { queries: COST.legacySale.queries + 1, external: COST.legacySale.external })) break;
         const full = await deps.stripe.retrieveSession(s.id);
         results.push((await recordLegacyLinkSale(ctx, full, deps)).status);
       }
       await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'legacy_sync', settings.legacy_payment_link_id, results.join(',') || 'none')]);
+      const stopped = results.length < sessions.length;
+      if (!results.length && stopped) throw fail('service_unavailable'); // rien n'a pu être relu : nouvel essai plus tard
       return json({ checked: results.length, recorded: results.filter((r) => !['duplicate', 'ignored'].includes(r)).length,
-        duplicates: results.filter((r) => r === 'duplicate').length, next: page.has_more ? page.data.at(-1).id : null });
+        duplicates: results.filter((r) => r === 'duplicate').length,
+        next: stopped || page.has_more ? sessions[results.length - 1].id : null });
     }
 
     // ---- drops et produits ----
@@ -667,21 +679,19 @@ async function orderRoutes(request, ctx, { method, id, action, requireStepUp, de
       const carrier = typeof body.carrier === 'string' ? body.carrier.trim().slice(0, 40) : null;
       const tracking = typeof body.tracking === 'string' ? body.tracking.trim().replace(/\s+/g, '').slice(0, 40) : null;
       if (tracking && !/^[A-Za-z0-9-]{6,40}$/.test(tracking)) throw fail('invalid_request', { field: 'tracking' });
+      // E-mail d'expédition : intention durable écrite avec l'événement « expédiée » (V13-B1).
+      const shippedMail = step === 'shipped' && order.source === 'storefront' && ctx.PUBLIC_ORIGIN && emailReady(ctx);
       try {
         await batch(ctx.db, [sql(ctx.db, 'INSERT INTO order_events (order_id, kind, detail, actor, at) VALUES (?, ?, ?, ?, ?)', id, step,
           step === 'shipped' ? JSON.stringify({ carrier, tracking }) : null, 'fondateur', now),
+        ...(shippedMail ? [intentStatement(ctx.db, { kind: 'order_shipped', dedupe: `shipped:${id}`, ref: id, now })] : []),
         audit(ctx.db, now, 'fondateur', `order_${step}`, label(order), 'ok')]);
       } catch (error) {
         if (error.dbCode === 'order_not_shippable') throw fail('order_not_shippable');
         if (error.dbCode === 'unique_failed') return json(await orderDetail(ctx, id)); // déjà fait : sans effet
         throw error;
       }
-      if (step === 'shipped' && order.source === 'storefront' && ctx.PUBLIC_ORIGIN) {
-        const contact = await viewContact(ctx, id, 'system', deps).catch(() => null);
-        if (contact?.email) {
-          await queueEmail(ctx, { dedupe: `shipped:${id}`, to: contact.email, ...shippedEmail({ order, carrier, tracking, origin: ctx.PUBLIC_ORIGIN }) }, now);
-        }
-      }
+      if (shippedMail) await processMailIntents(ctx, deps, { only: `shipped:${id}` });
       return json(await orderDetail(ctx, id));
     }
     // Commande « à vérifier » : décision du fondateur (Face ID).

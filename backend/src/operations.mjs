@@ -2,6 +2,7 @@
 // livre des recettes, accès journalisé aux coordonnées et purge des données personnelles.
 import { all, audit, batch, fail, iso, one, pad4, sha256Hex, sql } from './lib.mjs';
 import { openContact } from './security.mjs';
+import { COST, fits } from './budget.mjs';
 
 // ---------- étiquettes ----------
 // Une commande payée réserve son étiquette en base avant tout appel transporteur. Après une
@@ -75,6 +76,7 @@ export async function relayOverdue(env, deps, days = 7) {
   const rows = await all(db, `SELECT s.order_id, o.number, o.reference FROM shipments s JOIN orders o ON o.id = s.order_id
     WHERE s.tracking = 'available_at_relay' AND s.tracking_at <= ?`, now - days * 86400);
   for (const r of rows) {
+    if (!fits(deps, COST.relayReminder)) break; // rappels restants à l'heure suivante
     await deps.notify({ kind: 'parcel_not_collected', ref: r.order_id, level: 'warning',
       title: `Colis ${r.number ? pad4(r.number) : r.reference} non retiré`, body: `Disponible en relais depuis plus de ${days} jours.` });
   }

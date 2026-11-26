@@ -3,6 +3,7 @@
 // champs de la liste blanche (numéro, référence, taille, montant, mode de livraison) sont lus.
 import { all, batch, getSettings, one, pad4, sql } from './lib.mjs';
 import { pushReady } from './push.mjs';
+import { COST, fits } from './budget.mjs';
 
 const euros = (cents) => `${(cents / 100).toFixed(2).replace('.', ',')} €`;
 
@@ -82,7 +83,18 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
     WHERE status IN ('pending', 'sending') AND next_at <= ? ${only ? 'AND dedupe = ?' : ''} ORDER BY id LIMIT ?`,
   ...(only ? [now, only, limit] : [now, limit]));
   let sent = 0;
+  let devices = null; // appareils abonnés, lus une fois si un message push attend (coût par appareil)
   for (const row of rows) {
+    if (deps.budget) {
+      const push = row.channel === 'push';
+      if (push && devices === null) {
+        if (!fits(deps, { queries: 1 })) break;
+        devices = (await one(db, 'SELECT COUNT(*) AS n FROM push_subscriptions'))?.n ?? 0;
+      }
+      // Push : lecture des abonnements, puis une requête et un appel par appareil.
+      if (!fits(deps, push ? { queries: COST.outboxMessage.queries + 1 + devices * COST.pushDevice.queries, external: devices * COST.pushDevice.external }
+        : COST.outboxMessage)) break; // la suite à la minute suivante
+    }
     const claim = await batch(db, [sql(db, `UPDATE outbox SET status = 'sending', attempts = attempts + 1, next_at = ?
       WHERE id = ? AND status IN ('pending', 'sending') AND next_at <= ?`, now + 120, row.id, now)]);
     if (!claim[0].meta.changes) continue;
@@ -137,6 +149,7 @@ export async function maybeDailyReport(env, deps) {
   if (clock.hour < 10) return null;
   const settings = await getSettings(db);
   if (settings.report_last_date === clock.date) return null;
+  if (!fits(deps, COST.dailyReport)) return null; // budget de la minute épuisé : rapport à la minute suivante
   const claimed = await batch(db, [sql(db, `UPDATE settings SET value = ? WHERE key = 'report_last_date' AND value <> ?`,
     clock.date, clock.date)]);
   if (!claimed[0].meta.changes) return null;

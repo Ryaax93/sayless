@@ -7,6 +7,7 @@
 //  - empreintes anti-abus : 30 jours (réservations terminées), 2 jours (limites d'abus).
 // Point de départ : la livraison confirmée, à défaut le paiement.
 import { audit, batch, getSettings, sql } from './lib.mjs';
+import { COST, fits } from './budget.mjs';
 
 const DAY = 86400;
 const reference = `COALESCE((SELECT s.tracking_at FROM shipments s WHERE s.order_id = o.id AND s.tracking = 'delivered'), o.paid_at)`;
@@ -14,6 +15,7 @@ const reference = `COALESCE((SELECT s.tracking_at FROM shipments s WHERE s.order
 export async function applyRetention(env, deps) {
   const { db } = env;
   const now = deps.now();
+  if (!fits(deps, COST.retention)) return { deferred: true }; // budget de la minute épuisé : heure suivante
   const settings = await getSettings(db);
   const result = { rate_limits: 0, archived: 0, deleted: 0, client_hashes: 0, access_logs: 0, enabled: settings.retention_enabled === '1' };
   // Données purement techniques, sans lien avec un client : nettoyées dans tous les cas.

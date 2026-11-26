@@ -104,7 +104,7 @@ const DB_CODES = ['not_held', 'paused', 'not_published', 'stock_unverified', 'in
   'unknown_sku', 'ledger_append_only', 'audit_append_only', 'reservation_transition_forbidden',
   'order_transition_forbidden', 'return_not_allowed', 'return_quantity_exceeded', 'return_check_final',
   'inventory_via_ledger_only', 'stale_revision', 'assertion_failed', 'stale_generation', 'session_refused',
-  'terms_final', 'terms_unpublished', 'order_not_shippable'];
+  'terms_final', 'terms_unpublished', 'terms_outdated', 'order_not_shippable'];
 export function dbCode(error) {
   const message = String(error?.message ?? error);
   for (const code of DB_CODES) if (new RegExp(`\\b${code}\\b`).test(message)) return code;

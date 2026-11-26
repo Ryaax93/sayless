@@ -11,7 +11,7 @@ import { recordInventory } from '../../backend/src/stock.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
 
 const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql',
-  '0005_revue_work.sql', '0006_studio_ecrans.sql'];
+  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql'];
 // Texte de CGV de TEST uniquement (jamais publié) : sert à vérifier la version signée dans le devis.
 export const TEST_TERMS = { version: '2026-11', body: `CGV DE TEST — document fictif utilisé par les essais automatiques. ${'Clause de test. '.repeat(20)}` };
 export const TEST_LINK = { id: 'plink_test', price: 'price_test_lien' };
@@ -20,6 +20,18 @@ export const T0 = 1_800_000_000; // horloge simulée (secondes)
 export const ORIGIN = 'https://boutique.test';
 export const PII = { name: 'Client Test', email: 'client.test@example.invalid', phone: '+33100000000',
   address: { line1: '1 rue du Test', postal_code: '75000', city: 'Testville', country: 'FR' } };
+
+// Aucun appel réseau réel pendant les tests : Stripe, Resend, Discord, le push et Turnstile sont
+// simulés. Un appel vers l'extérieur échoue tout de suite, comme une panne réseau, et il est noté
+// (le moteur D1 local, sur 127.0.0.1, reste joignable).
+const realFetch = globalThis.fetch;
+export const blockedNetwork = [];
+globalThis.fetch = (input, init) => {
+  const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+  if (['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return realFetch(input, init);
+  blockedNetwork.push(url.host);
+  return Promise.reject(new TypeError(`réseau externe bloqué pendant les tests : ${url.host}`));
+};
 
 let mf;
 let next = 0;
@@ -43,6 +55,7 @@ export const engineFailure = (error) => {
 export const engineFailureSummary = () => [...engineFailures].map(([code, n]) => `${code} ×${n}`).join(', ');
 export async function stopDatabases() {
   await mf?.dispose();
+  if (blockedNetwork.length) console.error(`\n[banc] Appels réseau externes bloqués : ${[...new Set(blockedNetwork)].join(', ')} (×${blockedNetwork.length}).`);
   if (engineFailures.size) {
     console.error(`\n[banc] Moteur D1 local : échecs de connexion (${engineFailureSummary()}). Cause d’environnement`
       + ' (ports locaux, charge de la machine), à distinguer d’un défaut métier.');
@@ -79,24 +92,30 @@ export async function emptyDatabase() {
 }
 
 // Base « débranchable » : simule une panne D1, ou une réponse perdue après validation d'un lot
-// (loseResponseWhen reçoit les requêtes SQL du lot ; une seule fois).
+// (loseResponseWhen reçoit les requêtes SQL du lot ; une seule fois). beforeBatch(textes) : action
+// concurrente exécutée juste avant un lot (une seule fois si elle renvoie true).
+// `state.queries` : requêtes envoyées à D1, comptées comme Cloudflare (un lot = une requête), pour
+// vérifier la limite de 50 requêtes par invocation de l'offre gratuite.
 export function downable(real) {
-  const state = { down: false, loseResponseWhen: null };
+  const state = { down: false, loseResponseWhen: null, beforeBatch: null, queries: 0 };
   const fail = () => Promise.reject(new Error('D1 indisponible (simulé)'));
   const watch = (promise) => promise.catch((error) => { engineFailure(error); throw error; });
+  const query = (run) => { state.queries += 1; return state.down ? fail() : watch(run()); };
   const wrap = (stmt, text) => ({
     inner: stmt,
     text,
     bind: (...a) => wrap(stmt.bind(...a), text),
-    first: (...a) => (state.down ? fail() : watch(stmt.first(...a))),
-    all: (...a) => (state.down ? fail() : watch(stmt.all(...a))),
-    run: (...a) => (state.down ? fail() : watch(stmt.run(...a))),
+    first: (...a) => query(() => stmt.first(...a)),
+    all: (...a) => query(() => stmt.all(...a)),
+    run: (...a) => query(() => stmt.run(...a)),
   });
   return {
     state,
     prepare: (text) => wrap(real.prepare(text), text),
     batch: async (stmts) => {
+      state.queries += 1;
       if (state.down) throw new Error('D1 indisponible (simulé)');
+      if (state.beforeBatch && (await state.beforeBatch(stmts.map((s) => s.text ?? '')))) state.beforeBatch = null;
       const result = await watch(real.batch(stmts.map((s) => s.inner ?? s)));
       if (state.loseResponseWhen?.(stmts.map((s) => s.text ?? ''))) {
         state.loseResponseWhen = null;
