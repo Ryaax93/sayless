@@ -4,7 +4,7 @@
 // rejoués sur D1 de test, Stripe en mode test et le bac à sable du transporteur.
 import { readFile } from 'node:fs/promises';
 import { createHmac, randomBytes } from 'node:crypto';
-import { Miniflare } from 'miniflare';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { handleOps, handlePublicApi, createContext } from '../../backend/src/routes.mjs';
 import { StripeError } from '../../backend/src/stripe.mjs';
 import { recordInventory } from '../../backend/src/stock.mjs';
@@ -25,11 +25,29 @@ let mf;
 let next = 0;
 const SLOTS = 120;
 export async function startDatabases() {
-  mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("ok")}}',
+  // Miniflare 5 (celui de wrangler 4.168) : connexions locales réutilisées (keep-alive). Miniflare 4
+  // ouvrait une connexion par requête SQL, ce qui épuisait les ports de Windows (EADDRINUSE).
+  mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}',
     d1Databases: Object.fromEntries(Array.from({ length: SLOTS }, (_, i) => [`DB${i}`, `test-db-${i}`])),
-    kvNamespaces: ['BACKUPS'], compatibilityDate: '2026-05-15' });
+    kvNamespaces: ['BACKUPS'], compatibilityDate: '2026-05-15' }));
 }
-export const stopDatabases = () => mf?.dispose();
+// Échecs de connexion au moteur D1 local (ports épuisés, connexion coupée) : environnement, pas
+// résultat métier. Comptés et signalés en fin de fichier pour ne jamais les confondre avec un défaut.
+const engineFailures = new Map();
+export const engineFailure = (error) => {
+  const text = `${error?.message ?? ''} ${error?.cause?.code ?? ''} ${error?.cause?.message ?? ''}`;
+  const code = /EADDRINUSE|EADDRNOTAVAIL|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed|other side closed|socket/i.exec(text)?.[0];
+  if (code) engineFailures.set(code, (engineFailures.get(code) ?? 0) + 1);
+  return code ?? null;
+};
+export const engineFailureSummary = () => [...engineFailures].map(([code, n]) => `${code} ×${n}`).join(', ');
+export async function stopDatabases() {
+  await mf?.dispose();
+  if (engineFailures.size) {
+    console.error(`\n[banc] Moteur D1 local : échecs de connexion (${engineFailureSummary()}). Cause d’environnement`
+      + ' (ports locaux, charge de la machine), à distinguer d’un défaut métier.');
+  }
+}
 // KV en mémoire pour les sauvegardes : `corrupt` simule une écriture altérée par le stockage.
 export function createKV() {
   const store = new Map();
@@ -45,10 +63,14 @@ export function createKV() {
 }
 export const backupStore = () => mf.getKVNamespace('BACKUPS');
 
+// Une migration = un lot D1 (une seule requête vers le moteur local, comme une transaction de
+// `wrangler d1 migrations apply`). Statement par statement, chaque base de test coûtait près de
+// 90 connexions locales : assez pour épuiser les ports de Windows sur la suite complète.
 export async function migrate(db, files = WITHOUT_CATALOG) {
   for (const file of files) {
     const text = await readFile(new URL(`../../backend/migrations/${file}`, import.meta.url), 'utf8');
-    for (const part of text.split('--> statement-breakpoint').map((s) => s.trim()).filter(Boolean)) await db.prepare(part).run();
+    const parts = text.split('--> statement-breakpoint').map((s) => s.trim()).filter(Boolean);
+    await db.batch(parts.map((part) => db.prepare(part)));
   }
 }
 export async function emptyDatabase() {
@@ -61,20 +83,21 @@ export async function emptyDatabase() {
 export function downable(real) {
   const state = { down: false, loseResponseWhen: null };
   const fail = () => Promise.reject(new Error('D1 indisponible (simulé)'));
+  const watch = (promise) => promise.catch((error) => { engineFailure(error); throw error; });
   const wrap = (stmt, text) => ({
     inner: stmt,
     text,
     bind: (...a) => wrap(stmt.bind(...a), text),
-    first: (...a) => (state.down ? fail() : stmt.first(...a)),
-    all: (...a) => (state.down ? fail() : stmt.all(...a)),
-    run: (...a) => (state.down ? fail() : stmt.run(...a)),
+    first: (...a) => (state.down ? fail() : watch(stmt.first(...a))),
+    all: (...a) => (state.down ? fail() : watch(stmt.all(...a))),
+    run: (...a) => (state.down ? fail() : watch(stmt.run(...a))),
   });
   return {
     state,
     prepare: (text) => wrap(real.prepare(text), text),
     batch: async (stmts) => {
       if (state.down) throw new Error('D1 indisponible (simulé)');
-      const result = await real.batch(stmts.map((s) => s.inner ?? s));
+      const result = await watch(real.batch(stmts.map((s) => s.inner ?? s)));
       if (state.loseResponseWhen?.(stmts.map((s) => s.text ?? ''))) {
         state.loseResponseWhen = null;
         throw new Error('réponse D1 perdue après validation (simulé)');
@@ -272,26 +295,26 @@ export async function bench(stocks = { 'TEST-M': 1 }, { mode = 'open', productSt
   b.deps = { now: () => clock.now(), stripe, relays: fakeRelays, channels: ['discord'] };
   b.context = () => createContext(env, b.deps);
   if (!catalogSeed) {
-    await real.prepare(`INSERT INTO products (id, drop_id, name, price_cents, status) VALUES ('test-001', 'drop-test', 'Produit Test', 7500, ?)`)
-      .bind(productStatus).run();
+    // Catalogue de test en un seul lot (une requête vers le moteur local, voir migrate()).
+    const setup = [real.prepare(`INSERT INTO products (id, drop_id, name, price_cents, status) VALUES ('test-001', 'drop-test', 'Produit Test', 7500, ?)`)
+      .bind(productStatus)];
     let pos = 0;
     for (const sku of Object.keys(stocks)) {
-      await real.prepare(`INSERT INTO variants (sku, product_id, color, size, position) VALUES (?, 'test-001', 'test', ?, ?)`)
-        .bind(sku, sku.split('-').pop(), pos += 1).run();
-      await real.prepare('INSERT INTO inventory (sku) VALUES (?)').bind(sku).run();
+      setup.push(real.prepare(`INSERT INTO variants (sku, product_id, color, size, position) VALUES (?, 'test-001', 'test', ?, ?)`)
+        .bind(sku, sku.split('-').pop(), pos += 1));
+      setup.push(real.prepare('INSERT INTO inventory (sku) VALUES (?)').bind(sku));
       const size = sku.split('-').pop().toLowerCase();
-      if (['s', 'm', 'l'].includes(size)) await real.prepare('INSERT INTO legacy_link_sizes (value, sku) VALUES (?, ?)').bind(size, sku).run();
+      if (['s', 'm', 'l'].includes(size)) setup.push(real.prepare('INSERT INTO legacy_link_sizes (value, sku) VALUES (?, ?)').bind(size, sku));
     }
-    await real.prepare(`INSERT INTO shipping_rates (method, cents, label) VALUES ('relay', 490, 'Point relais'), ('home', 850, 'Colissimo domicile')`).run();
+    setup.push(real.prepare(`INSERT INTO shipping_rates (method, cents, label) VALUES ('relay', 490, 'Point relais'), ('home', 850, 'Colissimo domicile')`));
+    await real.batch(setup);
     const counted = Object.fromEntries(Object.entries(stocks).filter(([, q]) => q !== null));
     if (Object.keys(counted).length) await recordInventory(real, { counts: counted, actor: 'test', note: 'fixture', now: T0 });
   }
   await publishTerms(real, { ...TEST_TERMS, actor: 'test', now: T0 });
-  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'legacy_payment_link_id'`).bind(TEST_LINK.id).run();
-  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'legacy_link_price_id'`).bind(TEST_LINK.price).run();
-  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'shop_mode'`).bind(mode).run();
-  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'payments_enabled'`).bind(payments ? '1' : '0').run();
-  await real.prepare(`UPDATE settings SET value = ? WHERE key = 'low_stock_threshold'`).bind(String(threshold)).run();
+  const setting = (key, value) => real.prepare('UPDATE settings SET value = ? WHERE key = ?').bind(value, key);
+  await real.batch([setting('legacy_payment_link_id', TEST_LINK.id), setting('legacy_link_price_id', TEST_LINK.price), setting('shop_mode', mode),
+    setting('payments_enabled', payments ? '1' : '0'), setting('low_stock_threshold', String(threshold))]);
   return Object.assign(b, helpersFor(b));
 }
 

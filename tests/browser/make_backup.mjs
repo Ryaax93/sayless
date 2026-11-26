@@ -4,12 +4,12 @@
 // Écrit : public.json, private.json, copie.json (copie scellée), metadata.json.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Miniflare } from 'miniflare';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { checkDump, dumpDatabase, sealBackup } from '../../backend/src/backup.mjs';
 
 const [dir, date] = process.argv.slice(2);
 if (!dir || !/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) throw new Error('usage : make_backup.mjs <dossier> <AAAA-MM-JJ>');
-const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ['DB'], compatibilityDate: '2026-05-15' });
+const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ['DB'], compatibilityDate: '2026-05-15' }));
 try {
   const db = await mf.getD1Database('DB');
   const folder = new URL('../../backend/migrations/', import.meta.url);
