@@ -36,10 +36,11 @@ test('T02 tâche de chaque minute : minute 5 = sauvegarde seule (limites de l’
   const b = await bench({ 'TEST-M': 1 });
   b.clock.t = at('2027-01-15T10:05:00Z');
   const five = await runScheduled(b.env, { deps: b.deps });
-  assert.deepEqual(Object.keys(five), ['backup']);
+  assert.deepEqual(Object.keys(five), ['backup', 'budget']);
   b.clock.t = at('2027-01-15T10:06:00Z');
   const six = await runScheduled(b.env, { deps: b.deps });
-  assert.deepEqual(Object.keys(six), ['sweep', 'daily_report', 'outbox', 'channels', 'heartbeat']);
+  assert.deepEqual(Object.keys(six), ['sweep', 'daily_report', 'mail', 'outbox', 'channels', 'heartbeat', 'budget']);
+  assert.ok(six.budget.queries <= 50 && six.budget.external <= 50, 'requêtes et appels comptés, dans l’offre gratuite');
   assert.equal(await b.count("SELECT value FROM settings WHERE key = 'notify_channels'"), 'discord', 'canaux du Worker déclarés pour la boutique');
   assert.equal(await b.count("SELECT value FROM settings WHERE key = 'cron_last_run'"), String(b.clock.now()));
 });

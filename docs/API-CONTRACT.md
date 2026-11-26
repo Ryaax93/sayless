@@ -1,6 +1,24 @@
-# Contrat commun de la boutique — v1.3
+# Contrat commun de la boutique — v1.4
 
-**Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 et v1.2 implémentées par Claude et consommées par Work (`work/frontend-api-v1-2`) ; v1.3 = corrections de la revue de Work, à valider par Work.** Toutes les évolutions v1.3 sont additives : un client v1.2 continue de fonctionner (vérifié en rejouant les 8 tests d’intégration de Work sur la branche de vérification). Rien n’est déployé. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+**Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 et v1.2 implémentées par Claude et consommées par Work (`work/frontend-api-v1-2`) ; v1.3 = corrections de la revue de Work ; v1.4 = suite de la contre-revue v1.3 de Work (26 novembre), à valider par Work.** Les évolutions v1.3 et v1.4 sont additives : un client v1.3 continue de fonctionner (`terms_sha256` est facultatif au paiement pendant la transition). Rien n’est déployé. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+
+## Changements v1.4 (contre-revue v1.3 de Work, 26 novembre) — à valider par Work
+
+- **Texte exact des CGV (V13-C1)** : une version seule ne suffit plus. Le devis renvoie aussi `terms_sha256` (empreinte SHA-256 du texte archivé, 64 caractères hexadécimaux) et `terms_url` (`/api/terms/<version>`), tous deux signés dans le jeton du devis avec la version.
+- **Nouvelle route publique en lecture seule** : `GET /api/terms` (CGV en vigueur) et `GET /api/terms/<version>` (une version archivée, ancienne comprise). Réponse :
+
+  ```json
+  {"version": "2026-11", "sha256": "<64 hex>", "published_at": "ISO", "current": true, "format": "text/plain", "body": "<texte intégral>"}
+  ```
+
+  - `body` est du **texte brut** : l’afficher tel quel (`textContent`, retours à la ligne conservés), jamais l’interpréter comme du HTML.
+  - Empreinte recalculée par le serveur à chaque lecture ; un texte qui ne correspond plus à son empreinte n’est jamais servi (`503 not_configured`, alerte critique au fondateur).
+  - `ETag: "<sha256>"`. Version précise : `Cache-Control: public, max-age=86400, immutable` (un texte publié ne change jamais) ; `/api/terms` : `max-age=0, must-revalidate`.
+  - Erreurs : `404 not_found` (version inconnue), `503 not_configured` (aucune CGV publiée ou texte altéré).
+- **Affichage proposé côté boutique** : charger `terms_url` reçu dans le devis (pas `/api/terms`, qui peut changer entre-temps), vérifier côté navigateur que `sha256` = `terms_sha256` du devis (`crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))`), afficher ce texte, puis envoyer au paiement `terms_version` **et** `terms_sha256` reçus dans le devis. Si l’empreinte ne correspond pas : ne pas proposer « Payer », recharger le devis.
+- **Paiement** : `POST /api/checkout` accepte `terms_sha256`. Facultatif en v1.4 (compatibilité v1.3) ; s’il est présent, il doit avoir 64 caractères hexadécimaux minuscules (`400 invalid_request` sinon) et correspondre au devis et au texte archivé (`409 terms_outdated` sinon). **Proposition : obligatoire en v1.5**, une fois la boutique de Work mise à jour.
+- **CGV non archivées (V13-B2)** : devis refusé (`503 not_configured`) si le texte de la version en vigueur manque à l’archive ou ne correspond plus à son empreinte. La base refuse aussi toute réservation dans ce cas, et toute réservation dont la commande cite une autre version ou une autre empreinte que celles en vigueur : une publication de CGV concurrente pendant un paiement donne `409 terms_outdated`, sans commande créée. La reprise d’une tentative existante (même clé) n’est pas concernée.
+- **E-mails clients (V13-B1)** : aucun changement d’interface. Confirmation de commande, accusé des demandes et avis d’expédition sont désormais garantis côté serveur : une panne de la file d’envoi est réparée automatiquement, sans doublon.
 
 ## Changements v1.3 (revue de Work, 25 novembre) — à valider par Work
 
@@ -94,6 +112,8 @@ Aucune coordonnée personnelle : seul le code postal de livraison est demandé p
   "shipping": "home",
   "relay": null,
   "terms_version": "<version des CGV en vigueur (v1.3)>",
+  "terms_sha256": "<empreinte SHA-256 du texte archivé (v1.4)>",
+  "terms_url": "/api/terms/<version> (v1.4)",
   "expires_at": "<ISO, 10 minutes>"
 }
 ```
@@ -121,6 +141,7 @@ Relais (v1.3) : `"relay": {"id", "label", "network", "postcode", "city", "addres
   "relay_id": null,
   "quote_id": "<id du devis>",
   "terms_version": "<version acceptée des CGV>",
+  "terms_sha256": "<empreinte du texte affiché, reçue dans le devis (v1.4, facultatif)>",
   "turnstile": "<jeton anti-abus>"
 }
 ```
@@ -139,7 +160,7 @@ Réponse : `{"url": "https://checkout.stripe.com/...", "order_reference": "SL-XX
 | 409 `idempotency_conflict` | Ne pas réessayer automatiquement ; nouvelle tentative avec une nouvelle clé |
 | 409 `checkout_in_progress` | Réessayer avec la même clé après `Retry-After` (2 s) |
 | 409 `attempt_closed` | La tentative est terminée : `order_reference`, `payment_status` et, si elle existe, `session_id` (v1.3). Payée : afficher `/merci` ; sinon nouvelle clé et nouveau devis |
-| 409 `terms_outdated` | Recharger les CGV et redemander l’acceptation |
+| 409 `terms_outdated` | Recharger le devis et le texte des CGV (`terms_url`), puis redemander l’acceptation |
 | 422 `invalid_items`, `quantity_not_supported`, `destination_not_supported`, `postcode_required` | Corriger le panier, le code postal ou la destination ; afficher « Livraison en France métropolitaine, hors Corse pour le moment » |
 | 422 `invalid_relay` / `relay_required` | Revenir au choix du relais |
 | 503 `stock_unavailable`, `service_unavailable`, `not_configured` | Aucun compteur certain ni paiement ; proposer de réessayer |

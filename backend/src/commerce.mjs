@@ -7,6 +7,7 @@ import {
 import { explainShortage } from './stock.mjs';
 import { sessionParams } from './stripe.mjs';
 import { piiReady } from './security.mjs';
+import { termsDocument } from './terms.mjs';
 
 const SKU = /^[A-Z0-9-]{3,40}$/;
 
@@ -115,14 +116,16 @@ export async function searchRelays(env, deps, { postcode, country = 'FR' }) {
 
 // ---------- devis ----------
 // Le devis est un jeton signé (HMAC APP_SECRET) : aucune écriture en base, aucune coordonnée.
-// Il porte la version des CGV en vigueur : le paiement exige cette même version.
+// Il porte la version des CGV en vigueur ET l'empreinte du document archivé : le paiement exige
+// ce même document. Sans document archivé, aucun devis (une version seule ne suffit pas).
 export async function createQuote(env, body, deps) {
   const { db } = env;
   const now = deps.now();
   if (!env.APP_SECRET) throw fail('not_configured');
   const settings = await getSettings(db).catch(() => { throw fail('service_unavailable'); });
   if (settings.shop_mode !== 'open') throw fail('paused');
-  if (!settings.terms_version) throw fail('not_configured');
+  const terms = await termsDocument(db).catch(() => { throw fail('service_unavailable'); });
+  if (!terms?.intact) throw fail('not_configured'); // absent de l'archive, ou texte différent de son empreinte
   const items = normalizeItems(body.items, Number(settings.max_items_per_order || 1));
   const lines = await priceLines(db, items);
   await stockCheck(db, items);
@@ -133,7 +136,7 @@ export async function createQuote(env, body, deps) {
   const payload = {
     v: 1, exp: expires, items: lines.map((l) => [l.sku, l.quantity, l.unit_price_cents]),
     shipping: ship.method, relay: ship.relay, zone: ship.zone, ship: ship.cents, total: subtotal + ship.cents,
-    t: settings.terms_version,
+    t: terms.version, h: terms.sha256,
   };
   const encoded = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   const id = `q1.${encoded}.${await hmacB64(env.APP_SECRET, `quote:${encoded}`)}`;
@@ -147,7 +150,9 @@ export async function createQuote(env, body, deps) {
     total_cents: subtotal + ship.cents,
     shipping: ship.method,
     relay: ship.relay,
-    terms_version: settings.terms_version,
+    terms_version: terms.version,
+    terms_sha256: terms.sha256,
+    terms_url: `/api/terms/${terms.version}`,
     expires_at: iso(expires),
   };
 }
@@ -201,7 +206,10 @@ export async function startCheckout(env, input, deps) {
   const items = normalizeItems(body.items, Number(settings.max_items_per_order || 1));
   const relayId = body.shipping === 'relay' ? body.relay_id : null;
   if (typeof body.terms_version !== 'string' || !body.terms_version || body.terms_version.length > 40) throw fail('invalid_request');
-  const fingerprint = await sha256Hex(JSON.stringify({ items, shipping: body.shipping, relayId, quote: body.quote_id, terms: body.terms_version }));
+  // Empreinte du document affiché (contrat v1.4) : facultative pour les clients v1.3, vérifiée si fournie.
+  if (body.terms_sha256 !== undefined && (typeof body.terms_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(body.terms_sha256))) throw fail('invalid_request');
+  const fingerprint = await sha256Hex(JSON.stringify({ items, shipping: body.shipping, relayId, quote: body.quote_id, terms: body.terms_version,
+    ...(body.terms_sha256 ? { terms_sha256: body.terms_sha256 } : {}) }));
 
   // 1. Reprise : la tentative est retrouvée par sa clé avant tout contrôle du devis ou des CGV.
   //    Même contenu : même session Stripe et même réservation, sans nouveau contrôle anti-abus.
@@ -212,8 +220,12 @@ export async function startCheckout(env, input, deps) {
   if (!(quote.exp > now)) throw fail('quote_expired');
   const sameItems = JSON.stringify(items.map((i) => [i.sku, i.quantity])) === JSON.stringify(quote.items.map(([s, q]) => [s, q]));
   if (!sameItems || body.shipping !== quote.shipping || (relayId ?? null) !== (quote.relay?.id ?? null)) throw fail('quote_mismatch');
-  if (!settings.terms_version) throw fail('not_configured');
-  if (body.terms_version !== settings.terms_version || quote.t !== settings.terms_version) throw fail('terms_outdated');
+  // CGV : document archivé en vigueur, même version et même empreinte que le devis (et que le
+  // document affiché, si le client l'indique). La base refait ce contrôle au moment de réserver.
+  const terms = await termsDocument(db).catch(() => { throw fail('service_unavailable'); });
+  if (!terms?.intact) throw fail('not_configured');
+  if (body.terms_version !== terms.version || quote.t !== terms.version || (quote.h !== undefined && quote.h !== terms.sha256)
+    || (body.terms_sha256 !== undefined && body.terms_sha256 !== terms.sha256)) throw fail('terms_outdated');
   if (settings.shop_mode !== 'open') throw fail('paused');
   if (settings.payments_enabled !== '1' || !deps.stripe) throw fail('payments_disabled');
   // Coordonnées de livraison chiffrées obligatoires : sans clé valide, aucun paiement n'est ouvert.
@@ -238,11 +250,11 @@ export async function startCheckout(env, input, deps) {
   order.total_cents = order.subtotal_cents + order.shipping_cents;
   const statements = [
     sql(db, `INSERT INTO orders (id, reference, source, status, idempotency_key, request_fingerprint, shipping_method,
-        relay_id, relay_label, relay_snapshot, subtotal_cents, shipping_cents, total_cents, terms_version, stripe_expires_at,
+        relay_id, relay_label, relay_snapshot, subtotal_cents, shipping_cents, total_cents, terms_version, terms_sha256, stripe_expires_at,
         created_at, expires_at, updated_at)
-      VALUES (?, ?, 'storefront', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, 'storefront', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     order.id, order.reference, idempotencyKey, fingerprint, order.shipping_method, order.relay_id, order.relay_label,
-    order.relay_snapshot, order.subtotal_cents, order.shipping_cents, order.total_cents, body.terms_version, order.stripe_expires_at,
+    order.relay_snapshot, order.subtotal_cents, order.shipping_cents, order.total_cents, terms.version, terms.sha256, order.stripe_expires_at,
     now, now + holdSeconds, now),
   ];
   lines.forEach((l, i) => {
@@ -267,6 +279,7 @@ export async function startCheckout(env, input, deps) {
     if (code === 'paused') throw fail('paused');
     if (code === 'stock_unverified') throw fail('stock_unavailable');
     if (code === 'terms_unpublished') throw fail('not_configured');
+    if (code === 'terms_outdated') throw fail('terms_outdated');
     if (code === 'not_published') throw fail('invalid_items');
     if (code === 'hold_limit') throw fail('hold_limit');
     throw fail('service_unavailable');

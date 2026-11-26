@@ -318,3 +318,83 @@ test('U09 sauvegardes dans STUDIO : liste des copies vérifiées, téléchargeme
   await b.login(b.auth);
   assert.equal((await backupHealth()).state, 'alert');
 });
+
+test('U10 V13-B1 e-mail d’expédition : intention écrite avec l’événement « expédiée » ; panne de file réparée, une seule fois ; santé du site en alerte entre-temps', async () => {
+  const b = await signedIn();
+  const mail = fakeMail();
+  Object.assign(b.env, { RESEND_API_KEY: 're_test_uniquement', EMAIL_FROM: 'SAYLESS <commandes@example.invalid>' });
+  b.deps.senders = { email: resendSender(b.env, mail.transport) };
+  await b.inventory({ [SKU.S]: 2, [SKU.M]: 2, [SKU.L]: 2 });
+  await b.buy(SKU.M, '10.150.0.1');
+  const id = (await b.call('GET', '/api/admin/orders')).body.orders[0].id;
+  await b.real.prepare("CREATE TRIGGER fixture_mail_failure BEFORE INSERT ON outbox WHEN NEW.channel = 'email' BEGIN SELECT RAISE(ABORT, 'fixture_network_failure'); END").run();
+  const shipped = await b.call('POST', `/api/admin/orders/${id}/fulfil`, { step: 'shipped', carrier: 'Transporteur test', tracking: 'TEST654321' });
+  assert.equal(shipped.status, 200, 'expédition enregistrée malgré la panne de file');
+  assert.deepEqual(await b.real.prepare('SELECT kind, attempts FROM mail_intents WHERE dedupe = ?').bind(`shipped:${id}`).first(), { kind: 'order_shipped', attempts: 1 });
+  b.clock.t += 700;
+  await b.login(b.auth);
+  const health = (await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'File d’envoi');
+  assert.equal(health.state, 'alert');
+  assert.match(health.detail, /1 e-mail\(s\) client à mettre en file/);
+  await b.real.prepare('DROP TRIGGER fixture_mail_failure').run();
+  const { ctx, deps } = b.context();
+  const { runScheduled } = await import('../../backend/src/routes.mjs');
+  await runScheduled(b.env, { deps: b.deps });
+  assert.equal((await b.call('POST', `/api/admin/orders/${id}/fulfil`, { step: 'shipped', carrier: 'Transporteur test', tracking: 'TEST654321' })).status, 200, 'second clic sans effet');
+  await deliverOutbox(ctx, b.deps.senders, deps);
+  const sent = mail.sent.filter((m) => /TEST654321/.test(m.body.text));
+  assert.deepEqual([sent.length, sent[0]?.body.to], [1, [PII.email]]);
+});
+
+test('U11 ventes 1.0 relues par lots : chaque appel de STUDIO sous 50 requêtes D1 et 50 appels externes, reprise exacte, rien compté deux fois', async () => {
+  const b = await signedIn({ mode: 'paused' });
+  await b.sensitive('POST', '/api/admin/settings', { legacy_payment_link_id: 'plink_testlien01', legacy_link_price_id: 'price_testlien01' });
+  let stripeCalls = 0;
+  for (const m of ['listLinkSessions', 'retrieveSession']) {
+    const original = b.stripe[m].bind(b.stripe);
+    b.stripe[m] = (...a) => { stripeCalls += 1; return original(...a); };
+  }
+  const sell = (size, opts = {}) => b.stripe.linkSession(size, 7500, PII, { link: 'plink_testlien01', price: 'price_testlien01', ...opts });
+  for (let i = 0; i < 12; i += 1) { // deux jours avant l'inventaire : historique, sans effet sur le stock
+    const sid = sell(['s', 'm', 'l'][i % 3], { settledAt: b.clock.now() - 2 * 86400 });
+    b.stripe.sessions.get(sid).created = b.clock.now() - 2 * 86400;
+  }
+  await b.inventory({ [SKU.S]: 2, [SKU.M]: 2, [SKU.L]: 2 });
+  b.clock.t += 400;
+  for (const size of ['s', 'm', 'l', 's', 'm', 'l']) sell(size); // après l'inventaire : les 6 pièces, alertes de fin de stock
+  sell('xl');
+  sell('xxl');
+  sell('m', { price: 'price_inconnu' }); // à vérifier
+  // Comme STUDIO : relance automatique tant que la réponse indique où reprendre.
+  const syncAll = async () => {
+    await b.stepUp(b.auth);
+    const total = { checked: 0, recorded: 0, duplicates: 0, calls: 0 };
+    let after = null;
+    do {
+      const [q0, s0] = [b.db.state.queries, stripeCalls];
+      const r = await b.call('POST', '/api/admin/legacy/sync', after ? { after } : {});
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.ok(b.db.state.queries - q0 <= 50, `lot ${total.calls} : ${b.db.state.queries - q0} requêtes D1`);
+      assert.ok(stripeCalls - s0 <= 50, `lot ${total.calls} : ${stripeCalls - s0} appels Stripe`);
+      for (const k of ['checked', 'recorded', 'duplicates']) total[k] += r.body[k];
+      total.calls += 1;
+      after = r.body.next;
+    } while (after && total.calls < 25);
+    assert.equal(after, null, 'lecture terminée');
+    return total;
+  };
+  const first = await syncAll();
+  assert.ok(first.calls > 1, 'lecture répartie sur plusieurs appels');
+  assert.deepEqual([first.checked, first.recorded, first.duplicates], [21, 21, 0]);
+  assert.deepEqual(await b.rows(`SELECT status, review_reason, COUNT(*) AS n FROM orders WHERE source = 'legacy_link'
+    GROUP BY status, review_reason ORDER BY status, review_reason`), [{ status: 'paid', review_reason: null, n: 18 },
+    { status: 'paid_no_stock', review_reason: 'price', n: 1 }, { status: 'review', review_reason: 'size', n: 2 }],
+  '12 ventes historiques et 6 après l’inventaire ; tailles inconnues à vérifier ; prix inconnu sans pièce libre : décision du fondateur');
+  assert.deepEqual(await b.rows('SELECT sku, on_hand, reserved FROM inventory ORDER BY sku'),
+    [{ sku: SKU.L, on_hand: 0, reserved: 0 }, { sku: SKU.M, on_hand: 0, reserved: 0 }, { sku: SKU.S, on_hand: 0, reserved: 0 }],
+    'les 6 pièces vendues après l’inventaire sont sorties une fois');
+  assert.ok(await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'drop_sold_out'"), 'fin du drop signalée');
+  const again = await syncAll();
+  assert.deepEqual([again.checked, again.recorded, again.duplicates], [21, 0, 21], 'relire ne compte rien deux fois');
+  assert.equal(await b.count("SELECT COUNT(*) FROM orders WHERE source = 'legacy_link'"), 21);
+});

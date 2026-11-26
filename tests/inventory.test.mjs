@@ -2,7 +2,7 @@ import {test,before,after,beforeEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHmac} from 'node:crypto';
-import {Miniflare} from 'miniflare';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {stmt,getInventory,initializeInventory,reserve,getOrder,attachSession,applySessionEvent,recordRefund,adjustStock,restockReturn} from '../server/inventory.mjs';
 import {verifyStripeSignature,stripeReady,StripeTestClient,startTestCheckout,handleStripeWebhook,reconcileOrder} from '../server/stripe.mjs';
 import {handleRequest} from '../server/api.mjs';
@@ -19,7 +19,7 @@ async function quantity(){const s=await getInventory(db,'test');return [s.total,
 const rejectsCode=(promise,code)=>assert.rejects(promise,e=>e.code===code);
 
 before(async()=>{
- mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',d1Databases:['DB'],compatibilityDate:'2026-05-15'});
+ mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:'export default {fetch(){return new Response("ok")}}',d1Databases:['DB'],compatibilityDate:'2026-05-15'}));
  db=await mf.getD1Database('DB');
  for(const name of ['0000_sweet_warbird.sql','0001_inventory_guards.sql']){
   const sql=await readFile(new URL('../drizzle/'+name,import.meta.url),'utf8');

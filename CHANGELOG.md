@@ -1,5 +1,21 @@
 # Journal des modifications
 
+## 2026-11-26 — Claude : mission corrective prioritaire après la contre-revue v1.3 de Work (PR n° 1)
+
+Demandée par le fondateur le 26 novembre. Détail, mesures et correspondance des tests : `docs/AUDIT-V2-CLAUDE.md`, section 12.
+
+- **V13-B1, e-mails clients durables** : intention d’e-mail écrite dans le même lot que la vente, la demande ou l’expédition (`mail_intents`, migration `0007_intentions_cgv.sql`, `backend/src/intents.mjs`), sans donnée personnelle ; reprise par le renvoi du webhook, l’action liée et la tâche planifiée ; jamais de doublon ; alerte au 5e essai. Tests R11 à R14, U10 ; les deux tests `test:review:v13` de Work passent.
+- **V13-B2, CGV archivées** : devis et réservation refusés si le texte de la version en vigueur manque à l’archive ou ne correspond plus à son empreinte ; la base refuse aussi une réservation qui cite d’autres CGV que celles en vigueur (`terms_outdated`). Reprise d’une tentative préservée. Tests R15.
+- **V13-C1, texte exact des CGV** : route publique en lecture seule `GET /api/terms[/<version>]`, texte brut et empreinte SHA-256 vérifiée ; devis signé avec version et empreinte ; `terms_sha256` vérifié au paiement. Contrat **v1.4** pour Work (`docs/API-CONTRACT.md`). Tests R16.
+- **Windows** : cause environnementale (Miniflare 4 épuisait les ports locaux de Windows), corrigée par wrangler 4.168 et Miniflare 5, et par des migrations de test en lots, sans réduire la charge ni les assertions. Commit de dépendances dédié `ee54ed1`. CI Linux et Windows (`.github/workflows/verification.yml`, Node 26 LTS).
+- **Offre gratuite Cloudflare** : la tâche planifiée pouvait dépasser les 50 requêtes D1 et 50 appels externes par invocation après l’ouverture d’un drop, et la relecture des ventes 1.0 dans STUDIO aussi. Budget compté par invocation (`backend/src/budget.mjs`) ; travail repris à la minute suivante ; STUDIO relit les ventes 1.0 par lots. Tests R17, R18, U11.
+- **Audit npm** : 33 → 27 vulnérabilités (6 élevées corrigées dans les outils Cloudflare) ; les 27 restantes sont dans l’ancien gabarit Next/vinext, rien dans le code déployé. Proposition à Work et répartition des fichiers de dépendances : `docs/DEPENDANCES.md`, `docs/OWNERSHIP.md`.
+- **WebAuthn** : `@simplewebauthn/server` **14.1.0** retenue après comparaison sur 46 cas (test W01, ignoré tant que la bibliothèque n’est pas installée) et essai dans workerd sans `nodejs_compat`. Seul écart : la bibliothèque accepte les réponses d’une autre origine, que SAYLESS continue de refuser. Non intégrée avant l’accord de Work et du fondateur (`docs/WEBAUTHN-BIBLIOTHEQUE.md`).
+- **Banc d’essai** : aucun appel réseau réel pendant les tests (bloqué et signalé) ; échecs de connexion au moteur local signalés à part.
+- **Recette Cloudflare TEST, paiements fermés** : ajoutée à `docs/CLOUDFLARE-TEST.md`, à lancer seulement après accord.
+- **Tests sur `claude/integration-v2`** : backend 96/96 (Node 22, Linux) ; inventaire 16/16 ; frontend 15/15 et 13 vérifications commerciales ; `check:cloudflare` compilé (187,53 Kio, 49,26 Kio compressés) ; recette navigateur de STUDIO dans workerd sans erreur ni violation CSP.
+- **Non testé** : PC Windows du fondateur (CI Windows en cours), Cloudflare réel, temps de calcul par invocation (10 ms), Stripe en mode test, Resend réel, iPhone réel. Rien n’est déployé ; `main`, `v2`, le domaine, le DNS, Stripe et la boutique publique sont inchangés.
+
 ## 2026-11-25 — Work : intégration finale du contrat v1.3 (PR nº 2)
 
 - Contre-revue du SHA Claude `aab5270` : les quatre corrections précédentes sont confirmées par lecture et tests indépendants. Deux nouveaux défauts reproduits, e-mail de confirmation perdu après échec d'outbox et version CGV sans archive ; corrections proposées à Claude dans `docs/REVUE-V1-3-WORK.md`.

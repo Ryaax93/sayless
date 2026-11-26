@@ -6,7 +6,12 @@ import { bench, createKV, emptyDatabase, event, parallel, PII, startDatabases, s
 import { checkDump, dumpDatabase, listBackups, maybeDailyBackup, openBackup, restoreDatabase } from '../../backend/src/backup.mjs';
 import { buyLabel, viewContact } from '../../backend/src/operations.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
-import { sweep } from '../../backend/src/payments.mjs';
+import { recordLegacyLinkSale, sweep } from '../../backend/src/payments.mjs';
+import { handlePublicApi, runScheduled } from '../../backend/src/routes.mjs';
+import { processMailIntents } from '../../backend/src/intents.mjs';
+import { b64url, sha256Hex } from '../../backend/src/lib.mjs';
+import { COST } from '../../backend/src/budget.mjs';
+import { deliverOutbox } from '../../backend/src/notify.mjs';
 
 before(startDatabases);
 after(stopDatabases);
@@ -279,4 +284,320 @@ test('R10 balayage : session incertaine retrouvée pendant la réservation et ga
   const resumed = await b.checkout('TEST-M', '10.124.0.1', { quote: lost.quote, key: lost.key });
   assert.deepEqual([resumed.status, b.stripe.created], [200, 1]);
   void neverSent;
+});
+
+// ---------- 5. contre-revue v1.3 de Work : e-mails durables et CGV archivées ----------
+const MAIL = { RESEND_API_KEY: 're_test_uniquement', EMAIL_FROM: 'SAYLESS <commandes@example.invalid>' };
+// E-mails activés avec un réseau simulé : Resend répond « accepté », chaque envoi est noté.
+const mailOn = (b) => {
+  Object.assign(b.env, MAIL);
+  b.mails = [];
+  b.deps.transport ??= async (url, init) => { b.mails.push({ url, key: init.headers?.['Idempotency-Key'] }); return new Response('{}', { status: 200 }); };
+};
+const FAIL_MAIL = "CREATE TRIGGER fixture_mail_failure BEFORE INSERT ON outbox WHEN NEW.channel = 'email' BEGIN SELECT RAISE(ABORT, 'fixture_network_failure'); END";
+const emails = (b, kind) => b.count("SELECT COUNT(*) FROM outbox WHERE channel = 'email' AND dedupe LIKE ?", `email:${kind}:%`);
+
+test('R11 V13-B1 confirmation : intention écrite avec la vente ; panne de file réparée par la tâche planifiée, jamais perdue ni doublée', async () => {
+  const b = await bench({ 'TEST-S': 1, 'TEST-M': 2, 'TEST-L': 1 });
+  mailOn(b);
+  const c = await b.checkout('TEST-M', '10.211.0.1');
+  assert.equal(c.status, 200);
+  b.stripe.pay(c.sid);
+  await b.real.prepare(FAIL_MAIL).run();
+  const ev = event('checkout.session.completed', c.sid);
+  assert.equal(await b.webhook(ev), 200, 'vente appliquée et acquittée malgré la panne de file');
+  assert.equal(await b.count('SELECT status FROM orders WHERE stripe_session_id = ?', c.sid), 'paid');
+  const [intent] = await b.rows('SELECT kind, attempts, queued_at, last_error FROM mail_intents');
+  assert.deepEqual([intent.kind, intent.attempts, intent.queued_at], ['order_confirmation', 1, null], 'intention durable, en attente');
+  assert.match(intent.last_error, /fixture_network_failure/);
+  assert.equal(await b.webhook(ev), 200, 'renvoi du même événement pendant la panne');
+  assert.equal(await emails(b, 'order_confirmation'), 0);
+  await b.real.prepare('DROP TRIGGER fixture_mail_failure').run();
+  b.clock.t += 61;
+  const run = await runScheduled(b.env, { deps: b.deps });
+  assert.deepEqual(run.mail, { queued: 1, failed: 0 }, 'reprise par la tâche planifiée, sans aucun webhook');
+  assert.equal(await emails(b, 'order_confirmation'), 1);
+  // Renvois, nouvel événement, passages simultanés : toujours une seule confirmation.
+  await Promise.all([b.webhook(ev), b.webhook(event('checkout.session.completed', c.sid)),
+    processMailIntents(b.context().ctx, b.deps, { only: `order_confirmation:${await b.count('SELECT id FROM orders')}` })]);
+  assert.equal(await emails(b, 'order_confirmation'), 1);
+  assert.equal(await b.count('SELECT COUNT(*) FROM mail_intents'), 1);
+});
+
+test('R12 V13-B1 webhooks simultanés et adresses : une confirmation, aucune adresse en clair ; sans envoi configuré au paiement, aucune confirmation tardive', async () => {
+  const b = await bench({ 'TEST-S': 1, 'TEST-M': 2, 'TEST-L': 1 });
+  mailOn(b);
+  const c = await b.checkout('TEST-M', '10.212.0.1');
+  b.stripe.pay(c.sid);
+  await parallel(8, () => b.webhook(event('checkout.session.completed', c.sid)));
+  assert.equal(await emails(b, 'order_confirmation'), 1);
+  assert.equal(await b.count('SELECT COUNT(*) FROM mail_intents WHERE queued_at IS NOT NULL'), 1);
+  assert.equal(await b.count('SELECT COUNT(*) FROM mail_intents WHERE dedupe LIKE ? OR ref LIKE ?', `%${PII.email}%`, `%${PII.email}%`), 0, 'aucune donnée personnelle dans l’intention');
+  const quiet = await bench({ 'TEST-S': 1, 'TEST-M': 2, 'TEST-L': 1 });
+  const d = await quiet.checkout('TEST-M', '10.212.0.2');
+  quiet.stripe.pay(d.sid);
+  await quiet.webhook(event('checkout.session.completed', d.sid));
+  mailOn(quiet); // e-mails configurés après la vente
+  quiet.clock.t += 120;
+  await quiet.webhook(event('checkout.session.completed', d.sid));
+  await runScheduled(quiet.env, { deps: quiet.deps });
+  assert.deepEqual([await quiet.count('SELECT COUNT(*) FROM mail_intents'), await emails(quiet, 'order_confirmation')], [0, 0]);
+});
+
+test('R13 V13-B1 accusé des demandes : demande et intention dans la même transaction ; panne de file réparée, référence renvoyée', async () => {
+  const b = await bench({ 'TEST-M': 1 });
+  mailOn(b);
+  await b.real.prepare(FAIL_MAIL).run();
+  const res = await b.api('POST', '/api/requests', { body: { type: 'contact', name: 'Client Test', email: PII.email, message: 'Question de test', turnstile: 'jeton-test' } });
+  assert.equal(res.status, 200, 'demande enregistrée malgré la panne');
+  assert.match(res.body.reference, /^R-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+  assert.deepEqual([await b.count('SELECT COUNT(*) FROM customer_requests'), await b.count('SELECT attempts FROM mail_intents')], [1, 1]);
+  await b.real.prepare('DROP TRIGGER fixture_mail_failure').run();
+  b.clock.t += 61;
+  await runScheduled(b.env, { deps: b.deps });
+  await runScheduled(b.env, { deps: b.deps });
+  assert.equal(await emails(b, 'request_ack'), 1);
+});
+
+test('R14 V13-B1 intention bloquée : alerte critique au 5e essai, essais espacés ; commande remboursée entre-temps = rien envoyé', async () => {
+  const b = await bench({ 'TEST-S': 1, 'TEST-M': 2, 'TEST-L': 1 });
+  mailOn(b);
+  b.sent = [];
+  b.deps.notify = async (n) => { b.sent.push(n); };
+  const c = await b.checkout('TEST-M', '10.214.0.1');
+  b.stripe.pay(c.sid);
+  await b.real.prepare(FAIL_MAIL).run();
+  await b.webhook(event('checkout.session.completed', c.sid));
+  const { ctx } = b.context();
+  for (let attempt = 2; attempt <= 6; attempt += 1) {
+    b.clock.t = await b.count('SELECT next_at FROM mail_intents');
+    assert.deepEqual(await processMailIntents(ctx, b.deps, { limit: 3 }), { queued: 0, failed: 1 });
+    assert.equal(await b.count('SELECT attempts FROM mail_intents'), attempt);
+  }
+  const stuck = b.sent.filter((n) => n.kind === 'mail_intent_stuck');
+  assert.deepEqual(stuck.map((n) => n.level), ['critical'], 'une seule alerte, au 5e essai');
+  assert.ok(!JSON.stringify(stuck).includes(PII.email));
+  await b.real.prepare('DROP TRIGGER fixture_mail_failure').run();
+  await b.real.prepare("UPDATE orders SET status = 'refunded'").run();
+  b.clock.t = await b.count('SELECT next_at FROM mail_intents');
+  assert.deepEqual(await processMailIntents(ctx, b.deps, { limit: 3 }), { queued: 0, failed: 0 });
+  assert.deepEqual([await b.count('SELECT last_error FROM mail_intents'), await emails(b, 'order_confirmation')], ['obsolete', 0]);
+});
+
+test('R15 V13-B2 CGV : devis et réservation exigent le document archivé ; publication concurrente refusée par la base ; reprise préservée', async () => {
+  const b = await bench({ 'TEST-S': 2, 'TEST-M': 3, 'TEST-L': 2 });
+  const q = await b.quote([{ sku: 'TEST-M', quantity: 1 }]);
+  assert.deepEqual([q.body.terms_version, q.body.terms_sha256, q.body.terms_url], [TEST_TERMS.version, await sha256Hex(TEST_TERMS.body), `/api/terms/${TEST_TERMS.version}`]);
+  // Tentative ouverte, puis nouvelles CGV : la reprise rend la même session ; un nouvel achat exige le nouveau document.
+  const first = await b.checkout('TEST-M', '10.215.0.1', { quote: q });
+  assert.equal(first.status, 200);
+  assert.equal(await b.count('SELECT terms_sha256 FROM orders'), await sha256Hex(TEST_TERMS.body), 'empreinte acceptée conservée avec la commande');
+  await publishTerms(b.real, { version: '2027-01', body: `${TEST_TERMS.body} Version 2027-01.`, actor: 'test', now: b.clock.now() });
+  const resumed = await b.checkout('TEST-M', '10.215.0.1', { quote: q, key: first.key });
+  assert.deepEqual([resumed.status, resumed.body.url, b.stripe.created], [200, first.body.url, 1], 'reprise de la tentative existante');
+  assert.equal((await b.checkout('TEST-M', '10.215.0.2', { quote: q })).body.error, 'terms_outdated');
+  // Publication concurrente entre les contrôles et l'écriture : la base refuse la réservation.
+  const q2 = await b.api('POST', '/api/quote', { body: { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', postcode: '75011' }, ip: '10.215.0.3' });
+  b.db.state.beforeBatch = async (texts) => {
+    if (!texts.some((t) => t.includes('INSERT INTO reservations'))) return false;
+    await publishTerms(b.real, { version: '2027-02', body: `${TEST_TERMS.body} Version 2027-02.`, actor: 'test', now: b.clock.now() });
+    return true;
+  };
+  const raced = await b.api('POST', '/api/checkout', { ip: '10.215.0.3', headers: { 'Idempotency-Key': 'course-cgv-concurrente-0001' },
+    body: { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', quote_id: q2.body.id, terms_version: '2027-01', turnstile: 'jeton-test' } });
+  assert.deepEqual([raced.status, raced.body.error], [409, 'terms_outdated']);
+  assert.equal(await b.count("SELECT COUNT(*) FROM orders WHERE idempotency_key = 'course-cgv-concurrente-0001'"), 0, 'lot entier annulé');
+  // Version citée sans document : aucun devis, aucune commande, aucune réservation (contrôles SQL).
+  await b.real.prepare("UPDATE settings SET value = 'version-sans-document' WHERE key = 'terms_version'").run();
+  assert.equal((await b.quote([{ sku: 'TEST-M', quantity: 1 }])).body.error, 'not_configured');
+  const t = b.clock.now();
+  await assert.rejects(b.real.prepare(`INSERT INTO orders (id, reference, source, status, subtotal_cents, shipping_cents, total_cents, terms_version, created_at, updated_at)
+    VALUES ('o-fantome', 'SL-FANT-0001', 'storefront', 'pending', 7500, 0, 7500, 'version-sans-document', ?, ?)`).bind(t, t).run(), /terms_unpublished/);
+  await b.real.prepare(`INSERT INTO orders (id, reference, source, status, subtotal_cents, shipping_cents, total_cents, created_at, updated_at)
+    VALUES ('o-sans-cgv', 'SL-SANS-0001', 'storefront', 'pending', 7500, 0, 7500, ?, ?)`).bind(t, t).run();
+  await assert.rejects(b.real.prepare(`INSERT INTO reservations (id, order_id, sku, quantity, client_hash, status, expires_at, created_at, updated_at)
+    VALUES ('r-sans-cgv', 'o-sans-cgv', 'TEST-M', 1, 'c', 'held', ?, ?, ?)`).bind(t + 60, t, t).run(), /terms_unpublished/);
+  await b.real.prepare("UPDATE settings SET value = '2027-02' WHERE key = 'terms_version'").run();
+  await assert.rejects(b.real.prepare(`INSERT INTO reservations (id, order_id, sku, quantity, client_hash, status, expires_at, created_at, updated_at)
+    VALUES ('r-sans-cgv', 'o-sans-cgv', 'TEST-M', 1, 'c', 'held', ?, ?, ?)`).bind(t + 60, t, t).run(), /terms_outdated/, 'commande sans CGV : jamais réservée');
+});
+
+test('R16 V13-C1 texte des CGV : route publique en lecture seule, document exact et empreinte ; empreinte vérifiée au paiement ; texte altéré jamais servi', async () => {
+  const b = await bench({ 'TEST-S': 2, 'TEST-M': 3, 'TEST-L': 2 });
+  b.sent = [];
+  b.deps.notify = async (n) => { b.sent.push(n); };
+  const get = async (path) => {
+    const res = await handlePublicApi(new Request(`https://boutique.test${path}`), b.env, { deps: b.deps });
+    return { status: res.status, body: await res.json(), cache: res.headers.get('Cache-Control'), etag: res.headers.get('ETag'), cookie: res.headers.get('Set-Cookie') };
+  };
+  const digest = await sha256Hex(TEST_TERMS.body);
+  const cur = await get('/api/terms');
+  assert.deepEqual([cur.status, cur.body.version, cur.body.sha256, cur.body.current, cur.body.format, cur.body.body], [200, TEST_TERMS.version, digest, true, 'text/plain', TEST_TERMS.body]);
+  assert.equal(await sha256Hex(cur.body.body), cur.body.sha256, 'empreinte recalculable par la boutique');
+  assert.deepEqual([cur.cache, cur.etag, cur.cookie], ['public, max-age=0, must-revalidate', `"${digest}"`, null]);
+  const pinned = await get(`/api/terms/${TEST_TERMS.version}`);
+  assert.deepEqual([pinned.status, pinned.cache], [200, 'public, max-age=86400, immutable']);
+  assert.deepEqual([(await get('/api/terms/inconnue')).status, (await get('/api/terms/%3Cscript%3E')).status], [404, 404]);
+  // Empreinte du document affiché : vérifiée si la boutique l'envoie (contrat v1.4).
+  const q = await b.quote([{ sku: 'TEST-M', quantity: 1 }]);
+  const pay = (key, extra) => b.api('POST', '/api/checkout', { ip: '10.216.0.1', headers: { 'Idempotency-Key': key },
+    body: { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', quote_id: q.body.id, terms_version: TEST_TERMS.version, turnstile: 'jeton-test', ...extra } });
+  assert.equal((await pay('cgv-empreinte-fausse-0001', { terms_sha256: '0'.repeat(64) })).body.error, 'terms_outdated');
+  assert.equal((await pay('cgv-empreinte-format-0001', { terms_sha256: 'pas-une-empreinte' })).body.error, 'invalid_request');
+  assert.equal((await pay('cgv-empreinte-exacte-0001', { terms_sha256: digest })).status, 200);
+  // Nouvelle version : l'ancienne reste lisible (immuable), marquée comme ancienne.
+  await publishTerms(b.real, { version: '2027-01', body: `${TEST_TERMS.body} Version 2027-01.`, actor: 'test', now: b.clock.now() });
+  assert.deepEqual([(await get('/api/terms')).body.version, (await get(`/api/terms/${TEST_TERMS.version}`)).body.current], ['2027-01', false]);
+  // Texte altéré en contournant les protections : jamais servi, aucun devis, alerte critique.
+  await b.real.prepare('DROP TRIGGER terms_final_u').run();
+  await b.real.prepare("UPDATE terms_documents SET body = body || ' altéré' WHERE version = '2027-01'").run();
+  assert.equal((await get('/api/terms')).status, 503);
+  assert.equal((await b.quote([{ sku: 'TEST-M', quantity: 1 }])).body.error, 'not_configured');
+  assert.deepEqual(b.sent.filter((n) => n.kind === 'terms_integrity').map((n) => n.level), ['critical']);
+  await b.real.prepare("UPDATE settings SET value = '' WHERE key = 'terms_version'").run();
+  assert.deepEqual([(await get('/api/terms')).status, (await get('/api/terms')).body.error], [503, 'not_configured']);
+});
+
+// ---------- 5. limites de l'offre gratuite Cloudflare (50 requêtes D1, 50 appels externes) ----------
+// Les envois passent par les vrais expéditeurs (Resend, Discord, push) avec un réseau simulé, pour
+// compter chaque appel comme Cloudflare le compte. Le banc compte aussi, de son côté, chaque requête
+// D1 : les deux comptes doivent coïncider.
+async function heavyBacklog() {
+  const b = await bench({ 'TEST-U': 40 });
+  const vapid = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  Object.assign(b.env, MAIL, { DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/test-uniquement',
+    VAPID_PUBLIC_KEY: b64url(new Uint8Array(await crypto.subtle.exportKey('raw', vapid.publicKey))),
+    VAPID_PRIVATE_KEY: (await crypto.subtle.exportKey('jwk', vapid.privateKey)).d, VAPID_SUBJECT: 'mailto:test@example.invalid' });
+  for (const n of [1, 2]) {
+    const ua = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+    await b.real.prepare(`INSERT INTO push_subscriptions (endpoint, p256dh, auth, label, created_at) VALUES (?, ?, ?, 'test', ?)`)
+      .bind(`https://web.push.apple.com/QTEST${n}`, b64url(new Uint8Array(await crypto.subtle.exportKey('raw', ua.publicKey))),
+        b64url(crypto.getRandomValues(new Uint8Array(16))), T0).run();
+  }
+  b.network = [];
+  b.deps.channels = ['discord', 'push'];
+  b.deps.transport = async (url, init) => {
+    b.network.push({ host: new URL(url).host, key: init.headers?.['Idempotency-Key'] ?? null });
+    return new Response('{}', { status: String(url).includes('push.apple.com') ? 201 : 200 });
+  };
+  b.stripeCalls = 0;
+  for (const m of ['createCheckoutSession', 'retrieveSession', 'expireSession']) {
+    const original = b.stripe[m].bind(b.stripe);
+    b.stripe[m] = (...a) => { b.stripeCalls += 1; return original(...a); };
+  }
+  // Ouverture d'un drop : 25 paniers abandonnés, 3 ventes, 4 demandes dont l'accusé est resté en
+  // attente, 30 alertes pour le fondateur ; le rapport de 10 h est dû.
+  for (let i = 0; i < 25; i += 1) assert.equal((await b.checkout('TEST-U', `10.217.${i}.1`)).status, 200);
+  for (let i = 0; i < 3; i += 1) await b.buy('TEST-U', `10.218.${i}.1`);
+  await b.real.prepare(FAIL_MAIL).run();
+  for (let i = 0; i < 4; i += 1) {
+    assert.equal((await b.api('POST', '/api/requests', { ip: `10.219.0.${i}`, body: { type: 'contact', name: 'Client Test', email: PII.email, message: 'Question de test', turnstile: 'jeton-test' } })).status, 200);
+  }
+  await b.real.prepare('DROP TRIGGER fixture_mail_failure').run();
+  for (let i = 0; i < 30; i += 1) await b.context().deps.notify({ kind: 'technical', ref: `test:${i}`, level: 'info', title: 'Alerte de test', body: 'Message de test' });
+  b.clock.t = T0 + 4 * 3600 + 7 * 60; // 13 h 07 à Paris, paniers expirés
+  return b;
+}
+
+test('R17 offre gratuite : tâche planifiée sous 50 requêtes D1 et 50 appels externes par minute, même après l’ouverture d’un drop ; rien perdu ni doublé', async () => {
+  const b = await heavyBacklog();
+  const pending = async () => [await b.count("SELECT COUNT(*) FROM orders WHERE status = 'pending'"),
+    await b.count('SELECT COUNT(*) FROM mail_intents WHERE queued_at IS NULL'),
+    await b.count("SELECT COUNT(*) FROM outbox WHERE status <> 'sent'")];
+  const start = await pending();
+  assert.ok(start[0] === 25 && start[1] === 4 && start[2] > 60, `travail en attente au départ : ${start}`);
+  b.network = [];
+  let minutes = 0;
+  while ((await pending()).some(Boolean)) {
+    assert.ok(minutes < 30, `travail restant après 30 minutes : ${await pending()}`);
+    const [q0, n0, s0] = [b.db.state.queries, b.network.length, b.stripeCalls];
+    const report = await runScheduled(b.env, { deps: b.deps });
+    assert.ok(report.budget.queries <= 50 && report.budget.external <= 50, `minute ${minutes} : ${JSON.stringify(report.budget)}`);
+    assert.equal(report.budget.queries, b.db.state.queries - q0, 'chaque requête D1 comptée');
+    assert.equal(report.budget.external, b.network.length - n0 + b.stripeCalls - s0, 'chaque appel externe compté');
+    assert.deepEqual(Object.entries(report).filter(([, v]) => String(v).startsWith('erreur')), [], 'aucune étape interrompue');
+    if (!('backup' in report)) assert.equal(await b.count("SELECT value FROM settings WHERE key = 'cron_last_run'"), String(b.clock.now()), 'battement écrit');
+    minutes += 1;
+    b.clock.t += 60;
+  }
+  assert.ok(minutes >= 3, 'le travail a bien été réparti sur plusieurs minutes');
+  console.log(`[R17] arriéré traité en ${minutes} minutes`);
+  assert.deepEqual(await b.inv('TEST-U'), [37, 0], 'les 25 pièces des paniers abandonnés reviennent, les 3 vendues restent sorties');
+  assert.equal(await b.count("SELECT COUNT(*) FROM outbox WHERE status = 'dead'"), 0);
+  const resend = b.network.filter((c) => c.host === 'api.resend.com').map((c) => c.key);
+  assert.deepEqual([resend.length, new Set(resend).size], [7, 7], '3 confirmations et 4 accusés, une fois chacun');
+  const discord = await b.count("SELECT COUNT(*) FROM outbox WHERE channel = 'discord'");
+  const push = await b.count("SELECT COUNT(*) FROM outbox WHERE channel = 'push'");
+  assert.equal(b.network.filter((c) => c.host === 'discord.com').length, discord, 'chaque alerte Discord envoyée une fois');
+  assert.equal(b.network.filter((c) => c.host === 'web.push.apple.com').length, push * 2, 'chaque alerte push envoyée une fois à chacun des 2 appareils');
+  assert.ok(await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'daily_report'"), 'rapport du jour envoyé');
+});
+
+test('R18 offre gratuite : webhook de la dernière pièce (fin du drop) sous 50 requêtes ; pire coût par unité dans les marges du budget', async () => {
+  // Webhook : vente de la dernière pièce, deux e-mails en attente repris au passage.
+  const b = await bench({ 'TEST-S': 1, 'TEST-M': 1, 'TEST-L': 1 });
+  mailOn(b);
+  await b.buy('TEST-S', '10.220.0.1');
+  await b.buy('TEST-L', '10.220.0.2');
+  await b.real.prepare(FAIL_MAIL).run();
+  for (let i = 0; i < 3; i += 1) await b.api('POST', '/api/requests', { ip: `10.220.1.${i}`, body: { type: 'contact', name: 'Client Test', email: PII.email, message: 'Question', turnstile: 'jeton-test' } });
+  await b.real.prepare('DROP TRIGGER fixture_mail_failure').run();
+  b.clock.t += 61;
+  const c = await b.checkout('TEST-M', '10.220.0.3');
+  b.stripe.pay(c.sid);
+  const q0 = b.db.state.queries;
+  assert.equal(await b.webhook(event('checkout.session.completed', c.sid)), 200);
+  const used = b.db.state.queries - q0;
+  assert.ok(used <= 50, `webhook : ${used} requêtes`);
+  assert.deepEqual([await b.count("SELECT COUNT(*) FROM mail_intents WHERE kind = 'order_confirmation' AND queued_at IS NULL"),
+    await b.count("SELECT COUNT(*) FROM mail_intents WHERE kind = 'request_ack' AND queued_at IS NOT NULL")], [0, 2],
+  'confirmation mise en file, et deux accusés en attente repris au passage (le troisième à la minute suivante)');
+  assert.ok(await b.count("SELECT COUNT(*) FROM notifications WHERE kind IN ('size_sold_out', 'drop_sold_out')") >= 1, 'alertes de fin de stock émises');
+  // Pire cas par unité, mesuré : vente rattrapée par le balayage (webhook jamais reçu).
+  const r = await bench({ 'TEST-S': 1, 'TEST-M': 1, 'TEST-L': 1 });
+  mailOn(r);
+  await r.buy('TEST-S', '10.221.0.1');
+  await r.buy('TEST-L', '10.221.0.2');
+  const d = await r.checkout('TEST-M', '10.221.0.3');
+  r.stripe.pay(d.sid);
+  r.clock.t += 2000;
+  const q1 = r.db.state.queries;
+  const swept = await run(r, (ctx, deps) => sweep(ctx, deps, 1));
+  assert.equal(await r.count('SELECT status FROM orders WHERE stripe_session_id = ?', d.sid), 'paid', 'vente rattrapée');
+  assert.ok(r.db.state.queries - q1 <= COST.sweepOrder.queries, `balayage d’une vente : ${r.db.state.queries - q1} requêtes pour ${COST.sweepOrder.queries} prévues (${JSON.stringify(swept)})`);
+  // E-mail en échec au 5e essai (alerte) et message en échec définitif (alerte) : dans leur coût prévu.
+  const m = await bench({ 'TEST-M': 2 });
+  mailOn(m);
+  await m.real.prepare(FAIL_MAIL).run();
+  await m.buy('TEST-M', '10.222.0.1'); // 1er essai au paiement, en échec
+  assert.equal(await m.count('SELECT attempts FROM mail_intents'), 1);
+  for (let attempt = 2; attempt < 5; attempt += 1) {
+    m.clock.t += 3600;
+    await run(m, (ctx, deps) => processMailIntents(ctx, deps, { limit: 1 }));
+  }
+  m.clock.t += 3600;
+  const q2 = m.db.state.queries;
+  await run(m, (ctx, deps) => processMailIntents(ctx, deps, { limit: 1 }));
+  assert.equal(await m.count('SELECT attempts FROM mail_intents'), 5);
+  assert.equal(await m.count("SELECT COUNT(*) FROM notifications WHERE kind = 'mail_intent_stuck'"), 1, 'alerte émise au 5e essai');
+  assert.ok(m.db.state.queries - q2 - 1 <= COST.mailIntent.queries, `e-mail en échec avec alerte : ${m.db.state.queries - q2 - 1} requêtes`);
+  await m.real.prepare("UPDATE outbox SET attempts = 4, next_at = 0 WHERE channel = 'discord'").run();
+  m.deps.senders = { discord: async () => { throw new Error('discord_500'); } };
+  const q3 = m.db.state.queries;
+  const { ctx, deps } = m.context();
+  await deliverOutbox(ctx, deps.senders, deps, { limit: 1 });
+  assert.equal(await m.count("SELECT COUNT(*) FROM outbox WHERE status = 'dead'"), 1);
+  assert.ok(m.db.state.queries - q3 - 1 <= COST.outboxMessage.queries, `message en échec définitif avec alerte : ${m.db.state.queries - q3 - 1} requêtes`);
+  // Vente 1.0 qui épuise la dernière taille (alertes « taille épuisée » et « fin du drop »).
+  const l = await bench({ 'TEST-S': 1, 'TEST-M': 1, 'TEST-L': 1 });
+  l.clock.t += 400;
+  let worst = 0;
+  for (const size of ['s', 'm', 'l']) {
+    const full = await l.stripe.retrieveSession(l.stripe.linkSession(size, 7500, PII));
+    const q4 = l.db.state.queries;
+    assert.equal((await run(l, (ctx, deps) => recordLegacyLinkSale(ctx, full, deps))).status, 'paid');
+    worst = Math.max(worst, l.db.state.queries - q4);
+  }
+  assert.ok(await l.count("SELECT COUNT(*) FROM notifications WHERE kind = 'drop_sold_out'"), 'fin du drop signalée');
+  assert.ok(worst <= COST.legacySale.queries, `vente 1.0 la plus coûteuse : ${worst} requêtes pour ${COST.legacySale.queries} prévues`);
 });

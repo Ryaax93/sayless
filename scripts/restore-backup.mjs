@@ -8,7 +8,7 @@
 // Copie : téléchargée depuis STUDIO (Santé du site > Sauvegardes chiffrées), ou par
 //   npx wrangler kv key get --binding BACKUPS "daily/AAAA-MM-JJ" -c ops/wrangler.toml --remote > copie.json
 import { readFile } from 'node:fs/promises';
-import { Miniflare } from 'miniflare';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { checkDump, openBackup, restoreDatabase } from '../backend/src/backup.mjs';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, v, i, a) => (v.startsWith('--') ? [...acc, [v.slice(2), a[i + 1]]] : acc), []));
@@ -20,7 +20,7 @@ const box = await readFile(args.backup, 'utf8');
 const dump = await openBackup(box, JSON.parse(await readFile(args.key, 'utf8')));
 const created = new Date(JSON.parse(box).created_at * 1000).toISOString();
 const problems = checkDump(dump);
-const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ['DB'], compatibilityDate: '2026-05-15' });
+const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ['DB'], compatibilityDate: '2026-05-15' }));
 try {
   const db = await mf.getD1Database('DB');
   const after = await restoreDatabase(db, dump);

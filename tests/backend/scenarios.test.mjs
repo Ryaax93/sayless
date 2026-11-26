@@ -3,7 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { bench, event, parallel, startDatabases, stopDatabases, emptyDatabase, PII } from './helpers.mjs';
+import { bench, engineFailureSummary, event, parallel, startDatabases, stopDatabases, emptyDatabase, PII } from './helpers.mjs';
 import { sweep } from '../../backend/src/payments.mjs';
 import { releaseStatements } from '../../backend/src/commerce.mjs';
 import { adjustStock, invariants, publicStock } from '../../backend/src/stock.mjs';
@@ -17,13 +17,21 @@ before(startDatabases);
 after(stopDatabases);
 const HOLD = 1920;
 const run = async (b, fn) => { const { ctx, deps } = b.context(); return fn(ctx, deps); };
+// En cas d'échec : répartition des réponses et échecs du moteur local, pour distinguer un défaut
+// métier (réponses métier inattendues) d'un problème d'environnement (service_unavailable + échecs de connexion).
+const outcomes = (res) => {
+  const counts = {};
+  for (const r of res) { const k = r.status === 200 ? '200' : `${r.status} ${r.body?.error ?? '?'}`; counts[k] = (counts[k] ?? 0) + 1; }
+  return `réponses ${JSON.stringify(counts)} ; moteur local : ${engineFailureSummary() || 'aucun échec de connexion'}`;
+};
 
 test('t01 dernière pièce : 200 clients simultanés, une seule réservation', async () => {
   const b = await bench({ 'TEST-M': 1 });
   const quotes = await parallel(200, (i) => b.quote([{ sku: 'TEST-M', quantity: 1 }], { ip: `10.1.${i >> 8}.${i & 255}` }));
   const res = await parallel(200, (i) => b.checkout('TEST-M', `10.1.${i >> 8}.${i & 255}`, { quote: quotes[i] }));
-  assert.equal(res.filter((r) => r.status === 200).length, 1);
-  assert.ok(res.filter((r) => r.status !== 200).every((r) => r.body.error === 'held'));
+  const seen = outcomes(res);
+  assert.equal(res.filter((r) => r.status === 200).length, 1, seen);
+  assert.ok(res.filter((r) => r.status !== 200).every((r) => r.body.error === 'held'), seen);
   assert.deepEqual(await b.inv('TEST-M'), [1, 1]);
   assert.deepEqual(await invariants(b.real), []);
 });
@@ -32,7 +40,7 @@ test('t02 volume et doublons : 300 clients pour 26 pièces, chaque webhook reçu
   const b = await bench({ 'TEST-U': 26 });
   const res = await parallel(300, (i) => b.checkout('TEST-U', `10.2.${i >> 8}.${i & 255}`));
   const ok = res.filter((r) => r.status === 200);
-  assert.equal(ok.length, 26);
+  assert.equal(ok.length, 26, outcomes(res));
   for (const r of ok) b.stripe.pay(r.sid);
   const evs = ok.map((r) => event('checkout.session.completed', r.sid));
   await parallel(evs.length * 5, (i) => b.webhook(evs[i % evs.length]));
