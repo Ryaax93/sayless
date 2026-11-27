@@ -4,7 +4,35 @@
 
 **Version retenue par Claude : `@simplewebauthn/server` 14.1.0** (version exacte), celle qu’a essayée Work. Ma proposition précédente (14.0.3) est retirée : 14.1.0 est la dernière version publiée (6 novembre 2026) et l’audit npm de la bibliothèque et de ses 24 dépendances est vide.
 
-**Statut** : vérifiée hors du projet (dossier temporaire), **pas encore intégrée**. L’essai de STUDIO sur l’iPhone commence avec l’implémentation actuelle, auditée et testée. La bascule se fait avant la production, après accord de Work et validation du fondateur.
+**Statut au 27 novembre : intégration prête, DÉSACTIVÉE.** Accord technique de Work reçu (livraison v1.4). La bibliothèque est dans le projet (commit dédié `8253fe3`, audit à zéro). Elle ne vérifie rien tant que `WEBAUTHN_ENGINE` n’est pas réglé sur `simplewebauthn`, ce qui attend **ta validation explicite**. Sans ce réglage, STUDIO fonctionne exactement comme avant.
+
+## Ce qui change une fois activée
+
+La bibliothèque **s’ajoute** aux contrôles de SAYLESS ; elle ne les remplace pas. Une réponse Face ID n’est acceptée que si les deux vérifications l’acceptent. Tous les contrôles actuels restent en premier :
+
+- origine exacte, domaine (RP ID), défi à usage unique ;
+- refus d’une page intégrée dans un autre site (`crossOrigin`, `topOrigin`), que la bibliothèque laisserait passer ;
+- présence (UP) et vérification (UV, Face ID exigé), drapeaux de sauvegarde ;
+- signature, identifiant d’utilisateur, compteur qui recule (alerte « clé clonée ») ;
+- récupération par code de secours, révocation des sessions et des anciennes passkeys, confirmation Face ID des actions sensibles.
+
+Tests rejoués avec la bibliothèque activée (`npm run test:webauthn:bibliotheque`) :
+
+- A01 à A03, W01, S01 à S09 et U01 à U12 : 25 sur 25, sans changer leurs attentes ;
+- recette navigateur de STUDIO dans workerd, sans `nodejs_compat` : réussie.
+
+Contre-épreuve : une erreur glissée exprès dans l’appel à la bibliothèque fait échouer S01 quand elle est activée, et aucun test quand elle ne l’est pas. La bibliothèque est donc bien sur le chemin, et seulement quand on l’active.
+
+Coût : le Worker passe d’environ 188 Kio à 1 034 Kio (193 Kio compressés) ; limites de Cloudflare : 64 Mio, démarrage en moins d’une seconde. Le temps de calcul réel reste à mesurer sur Cloudflare de test.
+
+## Activer après ta validation (environnement de TEST)
+
+```powershell
+node scripts/test-env.mjs reglage WEBAUTHN_ENGINE simplewebauthn
+if ($LASTEXITCODE -ne 0) { throw 'Réglage non appliqué' }
+```
+
+L’assistant demande « OUI » puis remet le Worker en ligne. Ensuite : connexion Face ID et confirmation d’une action sensible sur l’iPhone. Pour revenir à la vérification seule de SAYLESS : `node scripts/test-env.mjs reglage WEBAUTHN_ENGINE sayless`. Les passkeys déjà enregistrées restent valables dans les deux cas.
 
 ## Vérifications faites le 26 novembre
 
@@ -40,7 +68,7 @@ Taille : Worker d’essai contenant seulement la bibliothèque, 705 Ko (129 Ko c
 
 La bibliothèque ne vérifie que la cérémonie WebAuthn. **Restent entièrement à SAYLESS, sans changement** : défis à usage unique en base (5 minutes), sessions `__Host-` (7 jours, 12 h d’inactivité), confirmation Face ID de moins de 5 minutes pour les actions sensibles, générations de passkeys, code de secours qui révoque passkeys, sessions et défis dans la même instruction SQL, inscription après récupération réservée à l’appareil qui a saisi le code, déconnexion de tous les appareils. Les tests S01 à S09 et U01 à U11 en sont les critères d’acceptation.
 
-## Intégration proposée (après accord)
+## Intégration proposée le 26 novembre (réalisée le 27, désactivée)
 
 1. **Dépendance** : `"@simplewebauthn/server": "14.1.0"` en version exacte, dans un commit dédié avec le verrou (règles de `DEPENDANCES.md`). Ce serait la **première dépendance npm embarquée dans le code déployé** : à relire par Work.
 2. **Adaptateur** dans `backend/src/webauthn.mjs`, même interface `verifyRegistration` et `verifyAssertion`, pour que tous les tests actuels s’appliquent sans changer leurs attentes. Avant d’appeler la bibliothèque, SAYLESS garde :

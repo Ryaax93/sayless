@@ -54,8 +54,10 @@ def main():
             metadata = f.read()
         run(["npx", "wrangler", "kv", "key", "put", f"daily/{day}", "--binding", "BACKUPS", "--path", os.path.join(keys, "copie.json"),
              "--metadata", metadata, "--local", "--persist-to", state, "-c", "ops/wrangler.toml"], env=env)
+        # SAYLESS_WEBAUTHN_ENGINE=simplewebauthn : même recette avec la vérification Face ID supplémentaire par la bibliothèque.
+        engine = ["--var", f"WEBAUTHN_ENGINE:{os.environ['SAYLESS_WEBAUTHN_ENGINE']}"] if os.environ.get("SAYLESS_WEBAUTHN_ENGINE") else []
         server = subprocess.Popen(["npx", "wrangler", "dev", "-c", "ops/wrangler.toml", "--local", "--persist-to", state,
-                                   "--port", str(PORT), "--local-protocol", "https", "--ip", "127.0.0.1"], cwd=ROOT, env=env,
+                                   "--port", str(PORT), "--local-protocol", "https", "--ip", "127.0.0.1", *engine], cwd=ROOT, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=os.setsid)
         try:
             wait_ready()

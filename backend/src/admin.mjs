@@ -10,7 +10,7 @@
 // chaque requête, et garanti par la base au moment de sa création (studio_session_admission).
 import { audit, b64url, batch, fail, getSettings, hmacB64, json, one, all, normalizeCode, randomCode, sha256Hex, sql, timingSafeEqual, uuid, errorResponse } from './lib.mjs';
 import { clientHash, readJson } from './security.mjs';
-import { newChallenge, verifyAssertion, verifyRegistration, WebAuthnError } from './webauthn.mjs';
+import { LIBRARY_ENGINE, newChallenge, verifyAssertion, verifyRegistration, WebAuthnError } from './webauthn.mjs';
 import { handleStudio } from './studio.mjs';
 
 const COOKIE = '__Host-sl_studio';
@@ -26,7 +26,9 @@ const RECOVERY_WINDOW = 900;
 export function studioConfig(env, request) {
   if (!env.STUDIO_ORIGIN && ['production', 'staging'].includes(env.ENVIRONMENT)) throw fail('not_configured');
   const origin = env.STUDIO_ORIGIN ?? new URL(request.url).origin;
-  return { origin, rpId: env.STUDIO_RP_ID ?? new URL(origin).hostname };
+  // Vérification Face ID par la bibliothèque en plus de celle de SAYLESS : seulement si
+  // WEBAUTHN_ENGINE = simplewebauthn, réglage posé après la validation du fondateur.
+  return { origin, rpId: env.STUDIO_RP_ID ?? new URL(origin).hostname, webauthnEngine: env.WEBAUTHN_ENGINE === LIBRARY_ENGINE ? LIBRARY_ENGINE : null };
 }
 const tokenHash = (env, token) => hmacB64(env.APP_SECRET, `session:${token}`);
 const recoveryHashOf = (env, token) => hmacB64(env.APP_SECRET, `recovery-device:${token}`);
@@ -154,7 +156,7 @@ export async function handleAdmin(request, env, deps) {
         const body = await readJson(request, 32768);
         if (enrollmentOpen ? !recovering : (enrolled || settings.studio_setup_used_at)) throw fail('already_enrolled');
         const challenge = await consumeChallenge(ctx, body.challenge_id, 'register', now, recovering ? recoveryHash : null);
-        const cred = await verifyRegistration({ response: body.credential, expectedChallenge: challenge, origin: config.origin, rpId: config.rpId });
+        const cred = await verifyRegistration({ response: body.credential, expectedChallenge: challenge, origin: config.origin, rpId: config.rpId, engine: config.webauthnEngine });
         const codes = Array.from({ length: 10 }, () => `${randomCode(4)}-${randomCode(4)}`);
         const batchId = uuid();
         const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 40) : 'Appareil principal';
@@ -206,7 +208,7 @@ export async function handleAdmin(request, env, deps) {
           await batch(ctx.db, [audit(ctx.db, now, 'inconnu', 'session_failed', stepup ? 'stepup' : 'login', 'unknown_or_revoked_credential')]);
           throw fail('unknown_credential');
         }
-        const result = await verifyAssertion({ response: body.credential, expectedChallenge: challenge, origin: config.origin,
+        const result = await verifyAssertion({ response: body.credential, expectedChallenge: challenge, origin: config.origin, engine: config.webauthnEngine,
           rpId: config.rpId, credential, userHandle: settings.studio_user_handle || null });
         if (!result.ok) {
           await batch(ctx.db, [audit(ctx.db, now, 'inconnu', 'session_failed', credential.label, 'counter_regressed')]);
@@ -319,7 +321,7 @@ export async function handleAdmin(request, env, deps) {
         const body = await readJson(request, 32768);
         requireStepUp();
         const challenge = await consumeChallenge(ctx, body.challenge_id, 'register', now, session.hash);
-        const cred = await verifyRegistration({ response: body.credential, expectedChallenge: challenge, origin: config.origin, rpId: config.rpId });
+        const cred = await verifyRegistration({ response: body.credential, expectedChallenge: challenge, origin: config.origin, rpId: config.rpId, engine: config.webauthnEngine });
         const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 40) : 'Nouvel appareil';
         try {
           await batch(ctx.db, [sql(ctx.db, `INSERT INTO passkeys (id, public_key, alg, sign_count, backed_up, transports, label, created_at, generation)

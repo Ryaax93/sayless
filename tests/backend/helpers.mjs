@@ -309,7 +309,9 @@ export async function bench(stocks = { 'TEST-M': 1 }, { mode = 'open', productSt
   const stripe = new FakeStripe(clock);
   const env = { DB: db, APP_SECRET: 'secret-de-test-uniquement', PUBLIC_ORIGIN: ORIGIN, ENVIRONMENT: 'test',
     TURNSTILE_BYPASS: 'test-only', STRIPE_WEBHOOK_SECRET: 'whsec_test_fixture',
-    PII_KEY: Buffer.from(randomBytes(32)).toString('base64url') };
+    PII_KEY: Buffer.from(randomBytes(32)).toString('base64url'),
+    // Vérification Face ID par la bibliothèque (npm run test:webauthn:bibliotheque).
+    ...(process.env.SAYLESS_WEBAUTHN_ENGINE ? { WEBAUTHN_ENGINE: process.env.SAYLESS_WEBAUTHN_ENGINE } : {}) };
   const b = { real, db, clock, stripe, env, carrier: new FakeCarrier(), sent: [] };
   b.deps = { now: () => clock.now(), stripe, relays: fakeRelays, channels: ['discord'] };
   b.context = () => createContext(env, b.deps);

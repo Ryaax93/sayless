@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 import { cbor, rawToDer } from './studio-helpers.mjs';
 import { cborDecode, verifyAssertion, verifyRegistration, WebAuthnError } from '../../backend/src/webauthn.mjs';
 
+// SAYLESS_WEBAUTHN_ENGINE=simplewebauthn (npm run test:webauthn:bibliotheque) : mêmes cas, mêmes
+// attentes, avec la vérification supplémentaire par la bibliothèque.
+const ENGINE = process.env.SAYLESS_WEBAUTHN_ENGINE ?? null;
 const enc = new TextEncoder();
 const ORIGIN = 'https://studio.test';
 const RP = 'studio.test';
@@ -41,7 +44,7 @@ async function registration(key, { flags = UP | UV | AT, client = {}, fmt = 'non
   const attestation = cbor(new Map([['fmt', fmt], ['attStmt', attStmt], ['authData', data]]));
   return { id: idOverride ?? b64(id), rawId: b64(id), type: 'public-key', response: { clientDataJSON: b64(clientData(client)), attestationObject: b64(attestation) } };
 }
-const register = (response) => verifyRegistration({ response, expectedChallenge: CHALLENGE, origin: ORIGIN, rpId: RP });
+const register = (response) => verifyRegistration({ response, expectedChallenge: CHALLENGE, origin: ORIGIN, rpId: RP, engine: ENGINE });
 const refused = async (promise, reason) => assert.rejects(promise, (e) => e instanceof WebAuthnError && e.reason === reason, `refus attendu : ${reason}`);
 
 test('A01 inscription : ES256 et RS256 acceptés ; chaque étape de la spécification refuse ce qui doit l’être', async () => {
@@ -83,7 +86,7 @@ test('A02 connexion : signature, compteur, identifiant d’utilisateur et drapea
       if (tamper) sig[sig.length - 5] ^= 0xff;
       return { id, rawId: id, type: 'public-key', response: { clientDataJSON: b64(cd), authenticatorData: b64(data), signature: b64(sig), userHandle } };
     };
-    const check = (response, extra = {}) => verifyAssertion({ response, expectedChallenge: CHALLENGE, origin: ORIGIN, rpId: RP, credential, userHandle: 'poignee-du-fondateur', ...extra });
+    const check = (response, extra = {}) => verifyAssertion({ response, expectedChallenge: CHALLENGE, origin: ORIGIN, rpId: RP, credential, userHandle: 'poignee-du-fondateur', engine: ENGINE, ...extra });
     assert.deepEqual((await check(await assertion())).ok, true);
     assert.equal((await check(await assertion({ userHandle: 'poignee-du-fondateur' }))).ok, true);
     await refused(check(await assertion({ userHandle: 'autre-utilisateur' })), 'user_handle');
@@ -96,7 +99,7 @@ test('A02 connexion : signature, compteur, identifiant d’utilisateur et drapea
     const back = await check(await assertion({ counter: 5 }));
     assert.deepEqual([back.ok, back.counterRegressed], [false, true], 'compteur qui ne progresse pas : clone possible');
     const synced = { ...credential, sign_count: 0 };
-    assert.equal((await verifyAssertion({ response: await assertion({ counter: 0, flags: UP | UV | BE | BS }), expectedChallenge: CHALLENGE, origin: ORIGIN, rpId: RP, credential: synced })).ok, true,
+    assert.equal((await verifyAssertion({ response: await assertion({ counter: 0, flags: UP | UV | BE | BS }), expectedChallenge: CHALLENGE, origin: ORIGIN, rpId: RP, credential: synced, engine: ENGINE })).ok, true,
       'passkey synchronisée (iCloud) : compteur toujours à 0, acceptée');
   }
 });

@@ -34,7 +34,9 @@ const NAMESPACE = 'sayless-test-backups';
 const DISCORD_SALONS = ['COMMANDES', 'EXPEDITIONS', 'RETOURS', 'STOCK', 'FINANCES', 'RAPPORT', 'ALERTES', 'SECURITE', 'SITE', 'SAUVEGARDES'];
 const SECRET_NAMES = ['DISCORD_WEBHOOK_URL', ...DISCORD_SALONS.map((s) => `DISCORD_WEBHOOK_${s}`),
   'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'TURNSTILE_SECRET'];
-const SETTING_NAMES = ['EMAIL_FROM', 'EMAIL_REPLY_TO'];
+// WEBAUTHN_ENGINE : « simplewebauthn » ajoute la vérification Face ID par la bibliothèque, SEULEMENT
+// après la validation du fondateur ; « sayless » revient à la vérification seule de SAYLESS.
+const SETTING_NAMES = ['EMAIL_FROM', 'EMAIL_REPLY_TO', 'WEBAUTHN_ENGINE'];
 
 class Stop extends Error {}
 const say = (line = '') => console.log(line);
@@ -310,6 +312,7 @@ async function main() {
   if (command === 'reglage') {
     const [name, ...value] = rest;
     if (!SETTING_NAMES.includes(name) || !value.length) stop(`Usage : node scripts/test-env.mjs reglage ${SETTING_NAMES.join('|')} "valeur"`);
+    if (name === 'WEBAUTHN_ENGINE' && !['simplewebauthn', 'sayless'].includes(value.join(' '))) stop('WEBAUTHN_ENGINE : « simplewebauthn » ou « sayless ».');
     await confirm(`${name} sera réglé et le Worker de TEST remis en ligne.`);
     state.settings = { ...state.settings, [name]: value.join(' ') };
     save();

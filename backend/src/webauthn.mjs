@@ -1,7 +1,14 @@
-// WebAuthn (passkeys) côté serveur, sans dépendance : vérification d'une inscription (attestation
-// « none ») et d'une connexion, pour les clés ES256 (iPhone, Mac) et RS256 (Windows Hello).
-// Contrôles : type, défi à usage unique, origine exacte, empreinte du domaine (rpId), présence et
-// vérification de l'utilisateur (Face ID exigé), signature, compteur qui ne recule jamais.
+// WebAuthn (passkeys) côté serveur : vérification d'une inscription (attestation « none ») et d'une
+// connexion, pour les clés ES256 (iPhone, Mac) et RS256 (Windows Hello).
+// Contrôles : type, défi à usage unique, origine exacte, refus d'un contexte d'une autre origine,
+// empreinte du domaine (rpId), présence et vérification de l'utilisateur (Face ID exigé),
+// signature, identifiant d'utilisateur, compteur qui ne recule jamais.
+//
+// Moteur `simplewebauthn` (WEBAUTHN_ENGINE, désactivé par défaut, à activer seulement après la
+// validation du fondateur) : @simplewebauthn/server 14.1.0 vérifie EN PLUS chaque réponse déjà
+// acceptée par tous les contrôles ci-dessus. Une réponse n'est acceptée que si les deux
+// vérifications l'acceptent : aucun contrôle SAYLESS n'est retiré (la bibliothèque, elle, accepte
+// un contexte d'une autre origine : docs/WEBAUTHN-BIBLIOTHEQUE.md).
 import { b64url, fromB64url } from './lib.mjs';
 
 export class WebAuthnError extends Error {
@@ -157,7 +164,27 @@ const bytesOf = (value, name) => {
   }
 };
 
-export async function verifyRegistration({ response, expectedChallenge, origin, rpId, requireUV = true }) {
+// Clé enregistrée (JWK) -> COSE, format attendu par la bibliothèque.
+function cborBytes(map) {
+  const out = [];
+  const head = (major, n) => { if (n < 24) out.push((major << 5) | n); else if (n < 256) out.push((major << 5) | 24, n); else out.push((major << 5) | 25, n >> 8, n & 255); };
+  head(5, map.size);
+  for (const [k, v] of map) {
+    if (k >= 0) head(0, k); else head(1, -1 - k);
+    if (v instanceof Uint8Array) { head(2, v.length); out.push(...v); } else if (v >= 0) head(0, v); else head(1, -1 - v);
+  }
+  return new Uint8Array(out);
+}
+export function jwkToCose(jwk, alg) {
+  if (alg === -7 && jwk.kty === 'EC' && jwk.crv === 'P-256') return cborBytes(new Map([[1, 2], [3, -7], [-1, 1], [-2, fromB64url(jwk.x)], [-3, fromB64url(jwk.y)]]));
+  if (alg === -257 && jwk.kty === 'RSA') return cborBytes(new Map([[1, 3], [3, -257], [-1, fromB64url(jwk.n)], [-2, fromB64url(jwk.e)]]));
+  return refuse('algorithm');
+}
+export const LIBRARY_ENGINE = 'simplewebauthn';
+const library = () => import('@simplewebauthn/server');
+const libraryRefuse = (error) => refuse(`library${error ? `:${String(error.message ?? error).slice(0, 60)}` : ''}`);
+
+export async function verifyRegistration({ response, expectedChallenge, origin, rpId, requireUV = true, engine = null }) {
   const r = response?.response ?? {};
   const clientDataJSON = bytesOf(r.clientDataJSON, 'client_data');
   checkClientData(clientDataJSON, 'webauthn.create', expectedChallenge, origin);
@@ -173,6 +200,17 @@ export async function verifyRegistration({ response, expectedChallenge, origin, 
   if (response.id !== credentialId || response.type !== 'public-key') refuse('credential_id');
   const { alg, jwk } = coseToJwk(auth.credential.publicKey);
   await importKey(jwk, alg); // clé importable, sinon refus
+  if (engine === LIBRARY_ENGINE) {
+    const { verifyRegistrationResponse } = await library();
+    let verified;
+    try {
+      verified = await verifyRegistrationResponse({ response, expectedChallenge, expectedOrigin: origin, expectedRPID: rpId,
+        requireUserVerification: requireUV, supportedAlgorithmIDs: [-7, -257] });
+    } catch (error) {
+      libraryRefuse(error);
+    }
+    if (!verified?.verified || verified.registrationInfo?.credential?.id !== credentialId) libraryRefuse();
+  }
   return { credentialId, alg, publicKey: JSON.stringify(jwk), signCount: auth.signCount, backedUp: auth.flags.bs,
     transports: Array.isArray(r.transports) ? r.transports.filter((t) => typeof t === 'string').slice(0, 6).join(',') : null };
 }
@@ -185,7 +223,7 @@ function importKey(jwk, alg) {
 
 // Connexion : signature sur authenticatorData || SHA-256(clientDataJSON). Compteur : s'il est
 // utilisé, il doit augmenter (une valeur qui recule signale une clé clonée). 0/0 = passkey synchronisée.
-export async function verifyAssertion({ response, expectedChallenge, origin, rpId, credential, requireUV = true, userHandle = null }) {
+export async function verifyAssertion({ response, expectedChallenge, origin, rpId, credential, requireUV = true, userHandle = null, engine = null }) {
   const r = response?.response ?? {};
   if (response?.type !== 'public-key' || response.id !== credential.id) refuse('credential_id');
   // Passkey découvrable : si l'authentificateur renvoie l'identifiant d'utilisateur, il doit être le nôtre.
@@ -203,6 +241,18 @@ export async function verifyAssertion({ response, expectedChallenge, origin, rpI
   if (!(await crypto.subtle.verify(params, key, signature, signed))) refuse('signature');
   const counterUsed = auth.signCount > 0 || credential.sign_count > 0;
   if (counterUsed && auth.signCount <= credential.sign_count) return { ok: false, counterRegressed: true, signCount: auth.signCount };
+  if (engine === LIBRARY_ENGINE) {
+    const { verifyAuthenticationResponse } = await library();
+    let verified;
+    try {
+      verified = await verifyAuthenticationResponse({ response, expectedChallenge, expectedOrigin: origin, expectedRPID: rpId,
+        requireUserVerification: requireUV,
+        credential: { id: credential.id, publicKey: jwkToCose(JSON.parse(credential.public_key), credential.alg), counter: credential.sign_count } });
+    } catch (error) {
+      libraryRefuse(error);
+    }
+    if (!verified?.verified || verified.authenticationInfo?.newCounter !== auth.signCount) libraryRefuse();
+  }
   return { ok: true, counterRegressed: false, signCount: auth.signCount, backedUp: auth.flags.bs };
 }
 
