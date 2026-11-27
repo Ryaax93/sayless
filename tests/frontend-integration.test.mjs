@@ -15,7 +15,7 @@ async function loadClient(name) {
     AbortController,
     setTimeout,
     clearTimeout,
-    crypto,
+    crypto, TextEncoder,
   });
   vm.runInContext(await readFile(new URL('../public/store/' + name, import.meta.url), 'utf8'), context);
   return context.module.exports;
@@ -115,6 +115,7 @@ test('domicile, devis signé à 83,50 €, CGV et coordonnées demandées unique
     'quote_id',
     'relay_id',
     'shipping',
+    'terms_sha256',
     'terms_version',
     'turnstile',
   ]);
@@ -228,7 +229,7 @@ test('v1.3 : changement serveur des CGV entre devis et paiement, nouveau consent
   await b.real.prepare("UPDATE settings SET value='version-suivante' WHERE key='terms_version'").run();
   await assert.rejects(flow.submit(credentials), e => e.code === 'terms_outdated');
   assert.equal(flow.state.accepted, false); assert.equal(b.stripe.created, 0);
-  assert.equal(requests.find(r => r.path === '/api/checkout').body.terms_version, q.terms_version);
+  assert.equal(requests.filter(r => r.path === '/api/checkout').length, 0, 'changement détecté avant toute réservation');
 });
 test('v1.3 : réponse perdue et devis expiré, puis tentative payée retrouvée sans nouveau stock', async () => {
   const { b, flow, quote } = await fixture({ dropResponse: true });

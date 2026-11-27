@@ -1,34 +1,29 @@
-# Boutique : préparation de Cloudflare TEST
+# Boutique : préparation Cloudflare TEST — API v1.4
 
-Complément Work à la procédure de Claude `CLOUDFLARE-TEST.md`, sans modification de cette procédure ni du Worker. Ne pas confondre préparation locale, aperçu privé et environnement Cloudflare hébergé.
+La procédure principale de Claude reste dans `CLOUDFLARE-TEST.md`. Les [commandes PowerShell Work](POWERSHELL-TEST-V1-4.md) distinguent vérifications locales, déploiement soumis à accord, puis connecteurs TEST. Aucun déploiement effectué dans cette livraison.
 
-## Construire sans activer les ventes
+## Build local fermé
 
 ```sh
 SAYLESS_TEST_ORIGIN=https://sayless-boutique-test.pages.dev npm run build:storefront:test
 ```
 
-La sortie `dist-storefront/` embarque une configuration publique fermée, sans clé ni version inventée. La commande ne crée aucune ressource et ne déploie rien. Les retours sont servis via le fallback SPA ; `/api/*` est confié aux Pages Functions. Les autres fichiers restent statiques. Ne pas joindre l'ancien serveur ou `admin.js` au déploiement.
+`dist-storefront/` contient la boutique, ses ressources, `_headers`, `_routes.json` et une configuration publique fermée. Aucun secret, aucun accès distant. Les routes API sont prises en charge par Pages Functions ; le Worker d'exploitation utilise le même code métier et la même D1 TEST.
 
-## Lorsque la recette de paiement TEST sera autorisée
+Après création autorisée de l'environnement par l'assistant Claude, `node scripts/prepare-pages-test.mjs` transforme son état local en `wrangler.json` local ignoré par Git. Aucun déploiement dans ce générateur : nom du projet et de la base fixes, origine workers.dev TEST contrôlée, aucun secret recopié. Il refuse d'écraser une configuration étrangère. Wrangler Pages découvre ce nom standard sans option `-c`.
 
-Après B1/B2 et coordination du texte CGV, le build accepte :
+## Prérequis avant ouverture du paiement TEST
 
-- `SAYLESS_TEST_ORIGIN` : exactement `https://sayless-boutique-test.pages.dev` ; toute autre origine est refusée.
-- `SAYLESS_TEST_TERMS_VERSION` : identifiant de la version dont le texte identique est publié côté boutique et archivé côté serveur.
-- `SAYLESS_TEST_TURNSTILE_SITE_KEY` : clé **publique** du site TEST.
-- `SAYLESS_TEST_CHECKOUT=enabled` : autorisation explicite du build de recette. Ne pas la renseigner avant la validation du fondateur et les prérequis ci-dessus.
+- Accord explicite, environnement séparé, mode staging, aucune clé réelle. Variante et stock de recette confirmés, boutique ouverte uniquement dans D1 TEST.
+- Transporteur TEST et relais vérifiables ; aucun paiement relais tant que le sélecteur n'a pas de fournisseur réel validé.
+- CGV TEST archivées via STUDIO : `/api/terms` et `/api/terms/{version}` doivent répondre avec le texte exact et son hash. La boutique charge le document du devis, vérifie SHA-256 et refuse toute divergence. **Plus de SAYLESS_TEST_TERMS_VERSION ni de version codée dans config.js.**
+- Stripe TEST pour Pages et Worker selon leurs rôles, webhook TEST signé côté Worker, APP_SECRET/PII_KEY cohérents, Turnstile sur l'origine TEST exacte.
+- `SAYLESS_TEST_TURNSTILE_SITE_KEY` : clé publique TEST. `SAYLESS_TEST_CHECKOUT=enabled` : uniquement après cet accord et les prérequis. Hors de `https://sayless-boutique-test.pages.dev`, le build reste fermé. Les contrôles serveur restent indépendants.
 
-La configuration générée revérifie l'origine dans le navigateur. Hors de cette origine elle reste fermée. Les verrous serveur sont indépendants : stock vérifié, CGV, secrets Stripe TEST, chiffrement, anti-abus et mode de boutique. La présence d'un prix ou d'une quantité dans le client ne les remplace jamais.
+Ne jamais mettre STRIPE_SECRET_KEY, APP_SECRET, PII_KEY, clé privée de sauvegarde, secret Turnstile, token Resend ou webhook Discord dans une variable frontend. Ne pas créer d'intégration Git Cloudflare automatique.
 
-Aucun secret Stripe/Resend/Discord/transporteur/APP_SECRET dans ces variables publiques. Suivre la procédure Claude pour D1, KV, migrations et secrets de TEST. Aucun lien Git automatique susceptible de publier `main` ou `v2` n'est mis en place.
+## Recette hébergée restant à faire
 
-## Avant validation hébergée
+Retour Stripe `/merci` et `/commande-annulee`, suivi `/#/suivi?t=…` puis jeton retiré de l'URL, no-store/no-referrer, CSP/Turnstile, code postal refusé, stock en pause/panne/épuisé/réservé, deux clients sur la dernière pièce, tentative existante après changement de CGV, absence de consentement, devis expiré, erreurs réseau, notifications dupliquées, totaux 79,90 €/83,50 €, vrais relais, e-mails reçus et rapprochement V14-R1. Vérifier Safari/iPhone, VoiceOver, PWA et métriques CPU/quotas sans changer de forfait.
 
-- Tester les retours `/merci`, `/commande-annulee` et `/#/suivi?t=…`, le retrait du jeton de l'URL, les en-têtes no-store des APIs et no-referrer.
-- Vérifier que Turnstile charge avec la CSP et le domaine TEST. La CSP statique ne remplace pas la protection des routes API.
-- Rejouer stock bloqué, deux achats concurrents de la dernière pièce, doublons de webhook, expiration et réseau interrompu ; aucun nouveau paiement après une tentative paid/review.
-- Vérifier les documents de CGV, 79,90 €/83,50 €, point réel, e-mails réellement reçus et identifiants TEST. Un statut HTTP réussi ne prouve pas qu'un message est livré.
-- Vérifier iPhone/Safari, VoiceOver, wallets et quotas/CPU sans changer d'offre ni engager de dépense.
-
-Les `_headers` gardent les pages de TEST en noindex ; leur adaptation pour un lancement commercial relèvera d'une validation distincte. Ce fichier n'autorise aucun déploiement.
+Le site TEST reste noindex. Les captures locales n'attestent ni Stripe, ni Boxtal, ni Resend, ni Face ID réel.

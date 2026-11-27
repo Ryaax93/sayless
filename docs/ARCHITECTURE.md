@@ -1,53 +1,34 @@
-# Architecture et migration
+# Architecture SAYLESS 2.0 — état v1.4
 
-## Préparation sur contrat v1.2
+La boutique est un site HTML/CSS/JavaScript autonome. `scripts/dev-storefront.mjs` permet une consultation sans dépendance ; les API y répondent explicitement indisponibles. `scripts/build-storefront.mjs` produit `dist-storefront/` à partir de `public/` et `data/`. Aucun runtime Next/Vinext n'est requis.
 
-Le site statique appelle les routes de même origine gérées par `functions/api/[[path]].js`. Le catalogue public relit prix et publication en D1. La boutique utilise les SKU du produit, conserve seulement un stock vérifié récent et attend un devis signé avant de présenter le total. CGV et Turnstile précèdent la réservation et la création de session. Sur le retour Stripe, `POST /api/checkout/status` détermine l’état affiché. Le Worker `ops/` reçoit les webhooks et rapproche les paiements avec le même code métier et la même base que l’API publique.
+## Architecture cible conservée
 
-Les choix de migration ci-dessous décrivent la situation initiale du 24 novembre. Les décisions actuelles figurent dans le [contrat v1.2](API-CONTRACT.md) et la [revue d’intégration](REVUE-PR-1-WORK.md).
-
-## Cible validée par le fondateur
-
-GitHub conserve le code ; Cloudflare Pages sert la boutique ; Workers gère les API ; D1 conserve l’état métier. Stripe Checkout reçoit les paiements. Claude développe SAYLESS STUDIO, les commandes, les expéditions Boxtal (ou équivalent), les notifications Discord et les e-mails Resend. Work intègre ces API dans la boutique et partage sa direction artistique.
-
-```mermaid
-flowchart TD
-  A["Boutique · Pages"] --> B["API · Worker"]
-  B --> C["D1 · état métier"]
-  B --> D["Stripe Checkout"]
-  D -->|"webhook signé"| B
-  E["SAYLESS STUDIO · accès protégé"] --> B
-```
-
-Les expéditions, e-mails et alertes sont des sorties du serveur, jamais du navigateur. Aucun service payant ni compte n’est configuré par ce dépôt. Les offres gratuites doivent être vérifiées sur les comptes retenus, avec leurs plafonds et leur comportement en cas de dépassement ; aucune absence de frais ne peut être garantie par ce code.
-
-## Code effectivement livré
-
-L’aperçu v4 fournit une boutique en HTML/CSS/JS, servie par une route Vinext, ainsi qu’un prototype de stock D1 et Stripe test. Le dépôt conserve ce code et ses migrations, sans base ni secrets. La commande portable ne lance que les fichiers publics et refuse les API. Elle ne constitue pas un backend commercial.
-
-Le build statique copie l’interface existante ; il n’est pas nécessaire de réécrire son design en React pour utiliser Pages. Les routes en hash `/#/...` fonctionnent dans un serveur statique. Les routes propres et leur référencement demandent une migration prévue, non effectuée dans cet export.
-
-## Incompatibilités et décisions à coordonner
-
-| Sujet | État hérité | Adaptation nécessaire |
+| Couche | Code et responsabilité | Exécution prévue |
 | --- | --- | --- |
-| Runtime | Vinext + Worker + greffons de prévisualisation | Servir le build statique sur Pages ; Claude crée son Worker et ses bindings |
-| Identité admin | En-têtes `oai-authenticated-user-*` injectés par l’ancien hébergeur | Remplacer par une identité vérifiée côté serveur : passkeys proposées dans le dernier rapport, Access facultatif (JWT vérifié). Choix à confirmer ; aucun en-tête client ne fait autorité |
-| Source de stock | `/api/inventory`, UUID de variantes, déclaration 26 non allouée | Nouveau `/api/stock`, SKUs stables, inventaire physique validé ; aucun fallback vers la déclaration |
-| Modèle métier | Prototype limité à Rose/S/M/L et 26 au premier chargement | Claude généralise produits/drops/couleurs et migrations ; ne pas appliquer les anciennes contraintes au futur catalogue |
-| Checkout | Simulation UI et opérations Stripe test réservées à l’admin | Sessions serveur, devis, coordonnées, relais valide, quantité et consentement ; un seul parcours client |
-| API proposée dans le rapport | Carte simple SKU → quantité et deux erreurs 409 | Ajouter vérification, date, états de réservation et épuisement confirmé ; détails dans API-CONTRACT.md |
-| Livraison Stripe | Le rapport propose deux tarifs dans la session | Le client a déjà choisi le mode et le relais : fixer côté serveur le choix validé pour éviter un changement incohérent dans Stripe |
-| Données clients | Aucun envoi dans l’aperçu | Le rapport prévoit coordonnées chez Stripe ; il faut préciser le traitement temporaire avant paiement, les demandes et retours avant/après achat, la conservation et les droits |
-| Suivi | Aucune page fonctionnelle | Éviter e-mail + numéro en query string ; POST de recherche puis accès borné et non énumérable |
-| Webhooks | Bloqués par l’accès privé de l’ancien aperçu | Endpoint public authentifié par signature Stripe ; administration séparée protégée |
-| Multi-produits | Présentation actuelle dédiée au Pink 001 | Le schéma catalogue et les APIs acceptent plusieurs produits ; rendre galerie/panier/fiches pilotés par ce catalogue est un travail frontend restant |
-| SEO | Routes hash, `noindex` volontaire dans l’aperçu | URL propres, canonicals, Open Graph, sitemap et Product/Offer basés sur données vérifiées avant publication |
+| Boutique | `public/store/`, Work | Cloudflare Pages, ressources statiques |
+| API publique de même origine | `functions/api/[[path]].js`, Claude | Pages Functions, importe le backend commun |
+| Logique métier et état | `backend/src/`, `backend/migrations/`, Claude | Worker/Pages Functions + D1 |
+| Exploitation, webhooks, cron | `ops/`, Claude | Worker distinct, même D1 par environnement |
+| Administration | `studio/`, Claude | Ressources STUDIO servies par le Worker |
+| Référence historique | `tests/legacy-fixtures/` | Uniquement les 16 tests historiques, jamais déployée |
 
-Ne pas déployer le prototype historique sous prétexte que ses tests locaux passent. Son authentification dépend de l’hébergeur d’origine et son schéma n’est pas celui de la cible. Aucun second serveur n’est développé dans ce dépôt.
+Le serveur fait autorité pour prix, devis, stock par variante, réservations et total. La boutique n'initialise jamais une quantité d'après un texte du fondateur. Stripe recueille les coordonnées après sélection du mode de livraison et d'un éventuel vrai relais sur SAYLESS. Une pièce maximum pour DROP 01, zone France métropolitaine hors Corse. L'ajout de produits/drops/couleurs est prévu dans le modèle serveur ; une refonte multi-produits de la présentation n'est pas ajoutée à cette stabilisation.
 
-## Provenance et conservation
+## CGV et parcours v1.4
 
-Source v4 : commit `e271bd63ee1ca9d806a921511fbc12900de4c14f`. Tous ses fichiers suivis ont été copiés ; `docs/source-snapshot.json` conserve leurs SHA-256. Les adaptations de cette branche sont documentées dans CHANGELOG.md. Les fichiers backend et les migrations restent identiques à cette source.
+Le devis signé contient version, empreinte et URL de l'archive. La boutique télécharge le document exact, vérifie SHA-256 avec Web Crypto et le rend par `textContent`. Le consentement est rattaché au devis. Une relecture avant toute nouvelle réservation bloque le paiement en cas de changement ou de panne. La reprise garde la même clé et le consentement originel ; le serveur résout la tentative avant d'exiger les CGV courantes. Le statut de retour Stripe provient de l'API, jamais du seul paramètre d'URL.
 
-L’identifiant de projet a été retiré de `.openai/hosting.json` dans la copie GitHub ; ce n’est pas une modification de l’aperçu publié. Aucun historique Git de l’atelier, configuration locale, dépendance installée, journal, base ou secret n’est transféré. Le `CNAME` de main n’est pas copié dans v2, et reste intact sur main.
+Suivi par jeton en mémoire et Bearer ; demandes clients avec référence persistée et traitement explicite des erreurs réseau. Intentions d'e-mails transactionnelles puis outbox chiffrée. Reste le cas de livraison incertaine au-delà de la fenêtre Resend : voir [contre-audit](REVUE-V1-4-WORK.md).
+
+## Frontières et limites
+
+- Un seul backend et un seul STUDIO. Aucun fichier métier Claude modifié dans le raccordement Work.
+- Next, React, Vinext, Vite, Drizzle, connecteurs de prévisualisation hérités et leurs configurations ne sont plus importés par les points d'entrée retenus : retirés avec l'accord de Claude, historique Git conservé.
+- Les modules historiques utiles ont été déplacés sans changement métier dans les fixtures ; aucune ancienne migration n'est appliquée à D1 cible.
+- Pas d'intégration Git de déploiement, pas de CNAME, pas de domaine ou de DNS modifié. Le manifeste de l'ancien hébergeur retiré de cette copie GitHub ne modifie pas l'aperçu déjà hébergé.
+- Ressources TEST séparées, paiement frontend fermé par défaut, mode staging côté serveur. Noindex conservé pour la recette.
+- Stripe TEST externe, Boxtal, Resend, Discord, iPhone et quotas CPU/volumes ne sont pas validés par les seuls tests locaux. [Procédure](POWERSHELL-TEST-V1-4.md).
+- Routes hash et référencement commercial final restent à valider avant lancement. Aucune réécriture graphique ni nouveau périmètre commercial ajouté.
+
+Le snapshot d'origine `docs/source-snapshot.json` documente la provenance historique, pas les empreintes de la version actuelle.

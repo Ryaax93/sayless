@@ -1,10 +1,16 @@
 # Journal des modifications
 
-## 2026-11-27 — Work : retrait du gabarit hérité et audit npm à zéro
+## 2026-11-27 — Work : stabilisation API v1.4, sans déploiement
 
-Retrait convenu avec Claude dans `docs/DEPENDANCES.md` §3 : Next/Vinext et anciens points d'entrée inutilisés supprimés. Références des 16 tests historiques déplacées sans changement métier dans `tests/legacy-fixtures/`.
+Base de vérification `f633255` contenant Claude `7102f43`. PR nº 2 conservée en brouillon ; main/v2 et boutique publique intacts.
 
-Manifeste et verrou régénérés ensemble sans --force, installation propre réussie. Audit complet 27 → 0, hors développement 5 → 0. Wrangler 4.168.0 et Miniflare 5.20261123.1-beta conservés. Validation finale d'intégration documentée dans la livraison v1.4 suivante. Aucun déploiement.
+- CGV exactes depuis `/api/terms[/version]` : SHA-256 Web Crypto, comparaison document/devis, rendu texte sans injection, relecture avant réservation, consentement renouvelé après changement et contrôle final du consentement avant envoi.
+- Reprise des tentatives précédentes conservant version, hash éventuel, clé et fingerprint ; aucune nouvelle tentative sur document invalide ou service indisponible.
+- Nettoyage convenu avec Claude : gabarit Next/Vinext, connecteurs et ancien backend inutilisés retirés ; 16 tests historiques conservés dans des fixtures isolées. Manifeste et verrou régénérés dans un commit dédié. npm audit complet **27 → 0**, hors développement **5 → 0**, sans déplacement artificiel de dépendances.
+- Générateur local de configuration Pages TEST sans secrets et sans déploiement ; procédure PowerShell détaillée, build fermé par défaut.
+- 211 tests Node et 13 contrôles commerciaux réussis ; compilations boutique, TEST, STUDIO, Worker dry-run et Pages Functions réussies. Nouvelle régression V14-R1 encore rouge : doublon Resend après réponse perdue et reprise >24 h. Critère et correction proposés à Claude, aucun backend concurrent.
+- Captures de recette mobile/ordinateur, design et STUDIO conservés. Inventaire déclaré S8/M14/L5 documenté sans activation. SimpleWebAuthn 14.1.0 essayé isolément, bascule soumise au fondateur.
+- Contre-audit, passation, état, responsabilités et guide de tests actualisés. Les affirmations historiques « jamais de doublon » ci-dessous sont limitées par V14-R1 ; voir `docs/REVUE-V1-4-WORK.md`.
 
 ## 2026-11-26 — Claude : mission corrective prioritaire après la contre-revue v1.3 de Work (PR n° 1)
 

@@ -1,0 +1,26 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:integration
+> node --test tests/frontend-integration.test.mjs
+
+✔ catalogue publié, total disponible non plafonné et refus des variantes hors catalogue (3942.240066ms)
+✔ inventaire non confirmé, pause et panne D1 ferment le parcours (234.976318ms)
+✔ domicile, devis signé à 83,50 €, CGV et coordonnées demandées uniquement sur Stripe (470.611868ms)
+✔ relais du fournisseur, devis à 79,90 €, revalidation du point et panne sans solution fictive (465.78031ms)
+✔ le client et le serveur refusent hors zone, deux pièces et une taille épuisée (350.283136ms)
+✔ double clic puis perte de la réponse, même tentative et une seule réservation (421.093508ms)
+✔ confirmation avec la paire attendue, statut en attente puis paiement confirmé une seule fois (715.067762ms)
+✔ paramètres désactivés, CGV obsolètes et suivi indisponible donnent des refus explicites (600.838593ms)
+✔ v1.3 : changement serveur des CGV entre devis et paiement, nouveau consentement requis (317.669795ms)
+✔ v1.3 : réponse perdue et devis expiré, puis tentative payée retrouvée sans nouveau stock (557.31535ms)
+✔ v1.3 : adresses des relais identiques dans la recherche, le devis et la commande (451.684414ms)
+✔ v1.3 : suivi authentifié, jeton expiré et lien non énumérable avec e-mails simulés (675.21015ms)
+✔ v1.3 : contact, retour et rétractation enregistrés chiffrés, accusés en file sans vrai envoi (430.390464ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10153.306514

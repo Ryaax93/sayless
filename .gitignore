@@ -65,3 +65,6 @@ __qa*
 *.tar.gz
 .env.local
 !/.env.example
+
+# Configuration Pages TEST générée localement (nom standard requis par Wrangler Pages).
+/wrangler.json

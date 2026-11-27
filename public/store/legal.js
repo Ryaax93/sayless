@@ -14,8 +14,8 @@ function legalContent(route) {
       content:`${draft}<h2>La marque et le contact</h2><p>SAYLESS est le nom de la marque présentée sur ce site. Contact : ${mail}.</p><h2>Visuels</h2><p>Le logo et les photos proviennent de la boutique SAYLESS existante. Les crédits et autorisations applicables sont à confirmer par la marque avant publication commerciale.</p>${sources([['https://entreprendre.service-public.gouv.fr/vosdroits/F37351','Service Public — mentions obligatoires']])}`
     },
     cgv: {
-      title:'Conditions de vente', description:'Prix, livraison et droits du client : les conditions préparées pour la boutique.',
-      content:`${draft}${window.SaylessConfig.termsVersion ? `<p class="small-text">Version présentée : ${escapeHTML(window.SaylessConfig.termsVersion)}</p>` : ''}<h2>Champ d’application et vendeur</h2><p>Ce projet de conditions concerne la vente de vêtements SAYLESS aux particuliers. L’identité et les coordonnées du vendeur seront celles des <a href="#/mentions-legales">mentions légales</a>, à compléter. Cet aperçu ne conclut aucun contrat de vente.</p><h2>Produit, disponibilité et prix</h2><p>Le Zip Hoodie Pink 001 est un gilet unisexe rose pastel, proposé en S, M et L à <strong>75 € TTC hors livraison</strong>. Les 30 pièces produites pour le DROP 01 sont en molleton de 350 g/m², composé à 80 % de coton et 20 % de polyester, avec une fermeture YKK et une capuche doublée.</p><p>Le total disponible est publié après vérification de l’inventaire. Une taille peut être épuisée ou temporairement réservée. Les mesures précises restent à confirmer.</p><p>Le régime fiscal du vendeur doit encore être renseigné.</p><h2>Commande et paiement</h2><p>Choisis ta taille, puis la livraison et le point relais le cas échéant. Vérifie l’article, les frais et le total TTC dans le récapitulatif. Tu peux encore les modifier avant d’accepter les conditions de vente et de terminer la vérification de sécurité.</p><p>À l’ouverture des ventes, Stripe recueillera les coordonnées et le règlement. La carte bancaire, Apple Pay ou Google Pay seront proposés selon les options disponibles sur ton appareil. Une commande est confirmée quand SAYLESS a vérifié son paiement. L’aperçu conserve les paiements désactivés.</p><h2>Livraison</h2><p>Une pièce par commande. La livraison en France métropolitaine hors Corse est prévue à 4,90 € en point relais et 8,50 € par Colissimo à domicile, sous réserve de validation du transporteur. Consulte les <a href="#/livraison">modalités de livraison</a>.</p><h2>Rétractation et remboursement</h2><p>Pour un vêtement standard acheté à distance auprès d’un professionnel, le délai de rétractation est en principe de 14 jours à compter de sa réception, sans justification. Une édition limitée ne supprime pas ce droit. Consulte les <a href="#/retours">modalités, délais de renvoi et formulaire de rétractation</a>. Les frais de renvoi pour un changement d’avis ou de taille sont à la charge du client. En cas d’article défectueux ou erroné, SAYLESS prend le retour en charge après vérification. L’adresse de retour reste à confirmer avant les ventes.</p><h2>Garanties légales</h2><p>Pour un bien neuf vendu par un professionnel, la garantie légale de conformité permet d’agir pendant deux ans après la délivrance. La réparation ou le remplacement doit intervenir sans frais et, en principe, dans les 30 jours suivant la demande. Les conditions légales permettent également, dans certains cas, une réduction du prix ou la résolution de la vente.</p><p>La garantie des vices cachés peut être invoquée dans les deux ans suivant la découverte du défaut, dans les limites légales. Elle permet de rendre le bien contre remboursement ou de le conserver avec une réduction du prix. Ces droits ne dépendent pas d’une éventuelle garantie commerciale.</p><p>L’encadré réglementaire complet applicable et les coordonnées du vendeur chargé des garanties seront intégrés après confirmation du statut.</p><h2>Réclamation et médiation</h2><p>Une réclamation peut être adressée à ${mail}. Le médiateur effectivement désigné, ses coordonnées et son site restent à renseigner. Le recours gratuit à la médiation intervient dans les conditions prévues par la loi, après une réclamation préalable auprès du vendeur. Aucun tribunal exclusif n’est imposé au consommateur.</p><h2>Données personnelles</h2><p>Le fonctionnement actuel est détaillé dans la <a href="#/confidentialite">politique de confidentialité</a>. Les traitements liés à la vente seront décrits avant leur activation.</p>${sources([['https://entreprendre.service-public.gouv.fr/vosdroits/F33527','Service Public — conditions générales de vente'],['https://www.service-public.gouv.fr/particuliers/vosdroits/F11094','Service Public — garantie de conformité'],['https://www.service-public.gouv.fr/particuliers/vosdroits/F11007','Service Public — vices cachés']])}`
+      title:'Conditions de vente', description:'Le document publié par SAYLESS, dans son intégralité.',
+      content:`<p id="terms-status" role="status">Chargement des conditions de vente…</p><div id="terms-document" class="terms-document" aria-label="Texte intégral des conditions de vente"></div><button type="button" class="text-link" data-reload-terms hidden>Réessayer</button>`
     },
     retours: {
       title:'Retours & rétractation', description:'Les conditions, les frais et les étapes pour retourner votre gilet.',
@@ -34,3 +34,27 @@ function legalContent(route) {
 }
 
 function withdrawalForm() { return window.SaylessService.form('withdrawal'); }
+
+// Le texte archivé est rendu directement, sans interprétation HTML ni normalisation.
+async function mountTermsDocument() {
+  const target = document.querySelector('#terms-document');
+  const status = document.querySelector('#terms-status');
+  const retry = document.querySelector('[data-reload-terms]');
+  if (!target || !status) return;
+  target.textContent = '';
+  status.textContent = 'Vérification des conditions de vente…';
+  if (retry) retry.hidden = true;
+  try {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    if (params.getAll('v').length > 1) throw new Error('version');
+    const doc = await window.SaylessAPI.terms(params.get('v'));
+    if (!target.isConnected) return;
+    target.textContent = doc.body;
+    status.textContent = 'Version ' + doc.version + (doc.current ? ' · Document en vigueur.' : ' · Document archivé.');
+  } catch {
+    if (!target.isConnected) return;
+    status.textContent = 'Les conditions de vente ne sont pas disponibles ou ne peuvent pas être vérifiées. Aucun nouveau paiement n’est possible. Contact : SayLe2s@outlook.com.';
+    if (retry) retry.hidden = false;
+  }
+}
+document.addEventListener('click', (event) => { if (event.target.closest('[data-reload-terms]')) mountTermsDocument(); });

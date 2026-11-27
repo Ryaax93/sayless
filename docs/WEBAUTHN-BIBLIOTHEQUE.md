@@ -57,3 +57,11 @@ La bibliothèque ne vérifie que la cérémonie WebAuthn. **Restent entièrement
 ## Ce qui ne change pas
 
 Aucun changement pour les clients ni la boutique. Aucune fusion vers `v2` ni déploiement sans l’accord du fondateur.
+
+## Vérification et avis Work — livraison v1.4
+
+Accord technique sur la proposition Claude **14.1.0**, sans remplacement effectif ni ajout au manifeste racine. Essai dans un dossier isolé : les 46 cas différentiels ont été rejoués avec leurs six écarts cross-origin attendus. Un second banc dans workerd, sans `nodejs_compat`, vérifie inscription et connexion signées ES256/RS256, refus mauvais RP ID/origine et wrapper cross-origin. Résultats concordants ; il ne s'agit pas d'une vraie validation Face ID.
+
+Conserver le wrapper de contexte strict et toutes les règles métier de récupération/session/reauth. Défis et codes à usage unique, révocation des anciennes générations, UP/UV, signatures et origine restent obligatoires. Le fondateur doit valider la bascule ; Claude écrit l'adaptateur et Work relit le verrou dans un commit dédié. Mesures CPU hébergées et iPhone réels restent nécessaires.
+
+Pour rejouer l'essai de bibliothèque, utiliser une copie isolée du dépôt ; ne pas lancer `npm install --no-save` dans le checkout de recette et ne pas modifier le verrou partagé incidemment. Les résultats exploratoires sont séparés des 211 tests du projet.

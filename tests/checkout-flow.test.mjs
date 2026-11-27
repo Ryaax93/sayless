@@ -11,7 +11,7 @@ const load = async (file) => {
     setTimeout,
     clearTimeout,
     fetch,
-    crypto,
+    crypto, TextEncoder,
   });
   vm.runInContext(await readFile(new URL('../public/store/' + file, import.meta.url), 'utf8'), c);
   return c.module.exports;
@@ -38,6 +38,7 @@ function harness() {
     id: 'signed-test-only',
     currency: 'EUR',
     terms_version: 'test',
+    terms_sha256: 'a'.repeat(64), terms_url: '/api/terms/test',
     items: [{ sku: 'ZH-PINK-M', quantity: 1, unit_price_cents: 7500, line_total_cents: 7500 }],
     shipping: 'home',
     relay: null,
@@ -47,6 +48,7 @@ function harness() {
     expires_at: new Date(clock.t + 600000).toISOString(),
   };
   const api = {
+    termsForQuote: async (q) => ({ version: q.terms_version, sha256: q.terms_sha256, body: 'CGV de recette uniquement.', current: true }),
     quote: async () => ({ ...quote }),
     checkout: async (i, o) => {
       calls.push({ i, o });

@@ -1,4 +1,4 @@
-// Régressions exprimant le résultat attendu pour Claude. Échecs connus documentés dans la revue.
+// Régressions de la revue v1.3, corrigées par Claude et conservées contre les récidives.
 // Services externes simulés, base locale éphémère. Aucun correctif backend dans cette branche Work.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

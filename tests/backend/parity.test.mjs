@@ -209,6 +209,7 @@ test('C02 parcours complet avec le vrai client : devis serveur, checkout idempot
   const stock = api.normalizeStock(await client.stock('test-001'), ['TEST-M']);
   const input = { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', terms_version: '2026-11', turnstile: 'jeton-test' };
   const quote = await client.quote({ items: input.items, shipping: 'home', postcode: '75011' });
+  input.terms_sha256 = quote.terms_sha256;
   assert.deepEqual([quote.currency, quote.total_cents, quote.shipping_cents], ['EUR', 8350, 850]);
   const result = await client.checkout(input, { stock, quote, idempotencyKey: 'cle-client-boutique-01' });
   assert.match(result.url, /^https:\/\/checkout\.stripe\.com\//);

@@ -1,0 +1,59 @@
+┌─────────┬───────────────────────────────────────────────────────┬───────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────┬────────┐
+│ (index) │ cas                                                   │ sayless                       │ bibliotheque                                                                      │ accord │
+├─────────┼───────────────────────────────────────────────────────┼───────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┼────────┤
+│ 0       │ 'ES256 inscription valide'                            │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 1       │ 'ES256 inscription : autre origine'                   │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 2       │ 'ES256 inscription : autre domaine (RP ID)'           │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 3       │ 'ES256 inscription : sans présence (UP)'              │ 'refuse (user_presence)'      │ 'refuse (User presence was required, but user was not present)'                   │ 'oui'  │
+│ 4       │ 'ES256 inscription : sans vérification (UV)'          │ 'refuse (user_verification)'  │ 'refuse (User verification was required, but user could not be verified)'         │ 'oui'  │
+│ 5       │ 'ES256 inscription : autre défi'                      │ 'refuse (challenge)'          │ 'refuse (Unexpected registration response challenge "AAAAAAAAAAAAAAAAAAAAAAAAAA)' │ 'oui'  │
+│ 6       │ 'ES256 inscription : mauvais type'                    │ 'refuse (type)'               │ 'refuse (Unexpected registration response type: webauthn.get)'                    │ 'oui'  │
+│ 7       │ 'ES256 inscription : crossOrigin true'                │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 8       │ 'ES256 inscription : topOrigin présent'               │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 9       │ 'ES256 inscription : BS sans BE'                      │ 'refuse (backup_state)'       │ 'refuse (Single-device credential indicated that it was backed up, which should)' │ 'oui'  │
+│ 10      │ 'ES256 inscription : format packed sans preuve'       │ 'refuse (attestation_format)' │ 'refuse (No attestation signature provided in attestation statement (Packed))'    │ 'oui'  │
+│ 11      │ 'ES256 inscription : id différent de rawId'           │ 'refuse (credential_id)'      │ 'refuse (Credential ID was not base64url-encoded)'                                │ 'oui'  │
+│ 12      │ 'ES256 inscription : octets en trop'                  │ 'refuse (credential)'         │ 'refuse (Leftover bytes detected while parsing authenticator data)'               │ 'oui'  │
+│ 13      │ 'ES256 connexion valide (clé JWK convertie en COSE)'  │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 14      │ 'ES256 connexion : signature altérée'                 │ 'refuse (signature)'          │ 'refuse'                                                                          │ 'oui'  │
+│ 15      │ 'ES256 connexion : autre origine'                     │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 16      │ 'ES256 connexion : autre domaine (RP ID)'             │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 17      │ 'ES256 connexion : sans présence (UP)'                │ 'refuse (user_presence)'      │ 'refuse (User not present during authentication)'                                 │ 'oui'  │
+│ 18      │ 'ES256 connexion : sans vérification (UV)'            │ 'refuse (user_verification)'  │ 'refuse (User verification required, but user could not be verified)'             │ 'oui'  │
+│ 19      │ 'ES256 connexion : mauvais type'                      │ 'refuse (type)'               │ 'refuse (Unexpected authentication response type: webauthn.create)'               │ 'oui'  │
+│ 20      │ 'ES256 connexion : crossOrigin true'                  │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 21      │ 'ES256 connexion : compteur qui recule'               │ 'refuse'                      │ 'refuse (Response counter value 5 was lower than expected 5)'                     │ 'oui'  │
+│ 22      │ 'ES256 connexion : passkey synchronisée (0/0, BE+BS)' │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 23      │ 'RS256 inscription valide'                            │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 24      │ 'RS256 inscription : autre origine'                   │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 25      │ 'RS256 inscription : autre domaine (RP ID)'           │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 26      │ 'RS256 inscription : sans présence (UP)'              │ 'refuse (user_presence)'      │ 'refuse (User presence was required, but user was not present)'                   │ 'oui'  │
+│ 27      │ 'RS256 inscription : sans vérification (UV)'          │ 'refuse (user_verification)'  │ 'refuse (User verification was required, but user could not be verified)'         │ 'oui'  │
+│ 28      │ 'RS256 inscription : autre défi'                      │ 'refuse (challenge)'          │ 'refuse (Unexpected registration response challenge "AAAAAAAAAAAAAAAAAAAAAAAAAA)' │ 'oui'  │
+│ 29      │ 'RS256 inscription : mauvais type'                    │ 'refuse (type)'               │ 'refuse (Unexpected registration response type: webauthn.get)'                    │ 'oui'  │
+│ 30      │ 'RS256 inscription : crossOrigin true'                │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 31      │ 'RS256 inscription : topOrigin présent'               │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 32      │ 'RS256 inscription : BS sans BE'                      │ 'refuse (backup_state)'       │ 'refuse (Single-device credential indicated that it was backed up, which should)' │ 'oui'  │
+│ 33      │ 'RS256 inscription : format packed sans preuve'       │ 'refuse (attestation_format)' │ 'refuse (No attestation signature provided in attestation statement (Packed))'    │ 'oui'  │
+│ 34      │ 'RS256 inscription : id différent de rawId'           │ 'refuse (credential_id)'      │ 'refuse (Credential ID was not base64url-encoded)'                                │ 'oui'  │
+│ 35      │ 'RS256 inscription : octets en trop'                  │ 'refuse (credential)'         │ 'refuse (Leftover bytes detected while parsing authenticator data)'               │ 'oui'  │
+│ 36      │ 'RS256 connexion valide (clé JWK convertie en COSE)'  │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 37      │ 'RS256 connexion : signature altérée'                 │ 'refuse (signature)'          │ 'refuse'                                                                          │ 'oui'  │
+│ 38      │ 'RS256 connexion : autre origine'                     │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 39      │ 'RS256 connexion : autre domaine (RP ID)'             │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 40      │ 'RS256 connexion : sans présence (UP)'                │ 'refuse (user_presence)'      │ 'refuse (User not present during authentication)'                                 │ 'oui'  │
+│ 41      │ 'RS256 connexion : sans vérification (UV)'            │ 'refuse (user_verification)'  │ 'refuse (User verification required, but user could not be verified)'             │ 'oui'  │
+│ 42      │ 'RS256 connexion : mauvais type'                      │ 'refuse (type)'               │ 'refuse (Unexpected authentication response type: webauthn.create)'               │ 'oui'  │
+│ 43      │ 'RS256 connexion : crossOrigin true'                  │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 44      │ 'RS256 connexion : compteur qui recule'               │ 'refuse'                      │ 'refuse (Response counter value 5 was lower than expected 5)'                     │ 'oui'  │
+│ 45      │ 'RS256 connexion : passkey synchronisée (0/0, BE+BS)' │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+└─────────┴───────────────────────────────────────────────────────┴───────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────┴────────┘
+✔ W01 SAYLESS et @simplewebauthn/server 14.1.0 : mêmes décisions sur 46 cas, sauf les réponses d’une autre origine (iframe) que SAYLESS seul refuse (105.727221ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 484.313081

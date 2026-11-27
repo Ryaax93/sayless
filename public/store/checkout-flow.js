@@ -10,6 +10,8 @@
     'quote_required',
     'price_changed',
     'terms_outdated',
+    'terms_invalid',
+    'terms_unverifiable',
     'sold_out',
     'held',
     'stock_unavailable',
@@ -56,6 +58,7 @@
       // Une tentative v1.2 déjà envoyée garde son consentement initial, sans devenir un nouveau devis.
       if (a.quote && !a.quote.terms_version) a.quote.terms_version = a.input.terms_version;
       if (!contract.validQuote(a.quote, a.input, 0, { legacyAttempt: true }) || a.quote.terms_version !== a.input.terms_version) return null;
+      if (a.input.terms_sha256 !== undefined && (!contract.validTermsRef(a.quote) || a.input.terms_sha256 !== a.quote.terms_sha256)) return null;
       return a;
     } catch {
       return null;
@@ -74,6 +77,7 @@
       phase: 'delivery',
       selection: null,
       quote: null,
+      terms: null,
       accepted: false,
       error: null,
       retryAt: 0,
@@ -102,7 +106,7 @@
       if (state.attempt || state.phase === 'submitting') throw error('attempt_pending');
       generation++;
       state.selection = JSON.parse(JSON.stringify(selection));
-      Object.assign(state, { quote: null, accepted: false, error: null, phase: 'delivery' });
+      Object.assign(state, { quote: null, terms: null, accepted: false, error: null, phase: 'delivery' });
     }
     async function quote() {
       if (state.attempt) throw error('attempt_pending');
@@ -114,12 +118,14 @@
       contract.destination(input.postcode, input.country);
       if (input.shipping === 'relay' && !input.relay_id) throw error('relay_required');
       const version = ++generation;
-      Object.assign(state, { phase: 'quoting', quote: null, accepted: false, error: null });
+      Object.assign(state, { phase: 'quoting', quote: null, terms: null, accepted: false, error: null });
       try {
         const result = await api.quote(input);
         if (version !== generation) return null;
         if (!contract.validQuote(result, input, now())) throw error('invalid_quote');
-        Object.assign(state, { quote: result, phase: 'review' });
+        const terms = await api.termsForQuote(result);
+        if (version !== generation) return null;
+        Object.assign(state, { quote: result, terms, phase: 'review' });
         return result;
       } catch (e) {
         if (version === generation)
@@ -132,29 +138,38 @@
         attempt: null,
         needsChallenge: false,
         quote: null,
+        terms: null,
         accepted: false,
         phase: 'delivery',
       });
       persist();
     }
     function accept(value) {
-      state.accepted = value === true;
+      state.accepted = value === true && Boolean(state.terms);
     }
 
     async function send({ termsVersion, turnstile }, retry) {
       try {
         let stock = null;
+        if (!retry) {
+          // Relecture sans cache juste avant toute NOUVELLE tentative. Une reprise garde
+          // le document et l'empreinte d'origine, même si les CGV ont été remplacées.
+          try { await api.termsForQuote(state.quote); }
+          catch (e) { clearConfirmed(); throw e; }
+        }
         if (!retry || state.needsChallenge) {
           stock = await getStock();
           if (stock?.status !== 'available' || !stock.checkoutEnabled)
             throw error(stock?.status === 'paused' ? 'paused' : 'stock_unavailable');
         }
         if (!retry) {
+          if (!state.accepted || !state.terms) throw error('terms_required');
           const input = {
             items: state.selection.items.map(({ sku, quantity }) => ({ sku, quantity })),
             shipping: state.selection.shipping,
             relay_id: state.selection.shipping === 'relay' ? state.selection.relay_id : null,
             terms_version: state.quote.terms_version,
+            terms_sha256: state.quote.terms_sha256,
           };
           state.attempt = { key: newKey(), input, quote: state.quote };
           persist();
@@ -201,7 +216,7 @@
       if (pending) return pending;
       if (now() < state.retryAt) return Promise.reject(error('rate_limited'));
       const retry = Boolean(state.attempt);
-      if (!retry && (!state.accepted || !termsVersion)) return Promise.reject(error('terms_required'));
+      if (!retry && (!state.accepted || !state.terms || !termsVersion)) return Promise.reject(error('terms_required'));
       if (!retry && termsVersion !== state.quote?.terms_version) {
         clearConfirmed();
         state.error = error('terms_outdated');

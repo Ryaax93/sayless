@@ -4,6 +4,9 @@
   const MAX_AGE_MS = 30000;
   const orderRef = /^SL-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
   const termsVersion = /^[A-Za-z0-9._-]{1,40}$/;
+  const termsHash = /^[0-9a-f]{64}$/;
+  const validTermsRef = (q) => termsVersion.test(q?.terms_version || '') &&
+    termsHash.test(q?.terms_sha256 || '') && q.terms_url === '/api/terms/' + q.terms_version;
   const paymentStates = ['pending', 'processing', 'paid', 'review', 'expired', 'failed', 'refunded'];
   const isText = (v, max = 200) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
   function validRelay(p, label = 'name') {
@@ -107,6 +110,7 @@
   function validQuote(q, input, now = Date.now(), { legacyAttempt = false } = {}) {
     if (!q || typeof q.id !== 'string' || !q.id || !termsVersion.test(q.terms_version || '') || q.currency !== 'EUR' || !(Date.parse(q.expires_at) > now))
       return false;
+    if (!legacyAttempt && !validTermsRef(q)) return false;
     if (
       !['subtotal_cents', 'shipping_cents', 'total_cents'].every(
         (k) => Number.isSafeInteger(q[k]) && q[k] >= 0,
@@ -146,6 +150,7 @@
     checkoutEnabled = false,
     timeoutMs = 5000,
     now = Date.now,
+    cryptoImpl = globalThis.crypto,
   } = {}) {
     async function request(path, { method = 'GET', body, headers = {} } = {}) {
       const ctrl = new AbortController(),
@@ -190,6 +195,29 @@
         clearTimeout(timer);
       }
     }
+    async function terms(version = null) {
+      if (version !== null && !termsVersion.test(version)) throw new ApiError('terms_invalid');
+      const doc = await request('/api/terms' + (version === null ? '' : '/' + version));
+      if (!termsVersion.test(doc.version || '') || (version !== null && doc.version !== version) ||
+          !termsHash.test(doc.sha256 || '') || doc.format !== 'text/plain' || typeof doc.current !== 'boolean' ||
+          !Number.isFinite(Date.parse(doc.published_at)) || typeof doc.body !== 'string' ||
+          doc.body.trim().length < 200 || doc.body.length > 200000) throw new ApiError('terms_invalid');
+      if (!cryptoImpl?.subtle?.digest) throw new ApiError('terms_unverifiable');
+      let digest;
+      try { digest = Array.from(new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', new TextEncoder().encode(doc.body))),
+        (b) => b.toString(16).padStart(2, '0')).join(''); }
+      catch { throw new ApiError('terms_unverifiable'); }
+      if (digest !== doc.sha256) throw new ApiError('terms_invalid');
+      return Object.freeze({ ...doc });
+    }
+    async function termsForQuote(quote) {
+      // Seule cette route de même origine est admise : jamais une URL arbitraire du serveur.
+      if (!validTermsRef(quote)) throw new ApiError('terms_invalid');
+      const doc = await terms(quote.terms_version);
+      if (doc.sha256 !== quote.terms_sha256) throw new ApiError('terms_invalid');
+      if (!doc.current) throw new ApiError('terms_outdated', 409);
+      return doc;
+    }
     async function checkout(input, { stock, quote, idempotencyKey, retry = false } = {}) {
       if (!checkoutEnabled) throw new ApiError('payments_disabled', 403);
       if (
@@ -223,6 +251,8 @@
         throw new ApiError('challenge_required', 403);
       if (!termsVersion.test(input.terms_version || '') || input.terms_version !== quote.terms_version)
         throw new ApiError('terms_outdated', 409);
+      if ((!retry || input.terms_sha256 !== undefined) &&
+          (!validTermsRef(quote) || input.terms_sha256 !== quote.terms_sha256)) throw new ApiError('terms_invalid');
       const seen = new Set();
       const items = input.items.map((item) => {
         if (
@@ -248,6 +278,7 @@
           relay_id: input.shipping === 'relay' ? input.relay_id : null,
           quote_id: quote.id,
           terms_version: input.terms_version,
+          ...(input.terms_sha256 !== undefined ? { terms_sha256: input.terms_sha256 } : {}),
           turnstile: retry ? undefined : input.turnstile,
         },
       });
@@ -270,6 +301,8 @@
       return { url: url.href, order_reference: data.order_reference, expires_at: data.expires_at };
     }
     return Object.freeze({
+      terms,
+      termsForQuote,
       catalog: () => request('/api/catalog'),
       stock: (productId) => request('/api/stock?product_id=' + encodeURIComponent(productId)),
       quote: (input) =>
@@ -313,6 +346,7 @@
     MAX_AGE_MS,
     orderRef,
     termsVersion,
+    validTermsRef,
     paymentStates,
     validRelay,
     validOrder,

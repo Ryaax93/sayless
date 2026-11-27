@@ -179,6 +179,7 @@ function render() {
   if(route==='produit') setupProductBar();
   window.SaylessInventory.enter();
   if(route==='paiement')window.SaylessCheckoutUI.mount();
+  if(route==='cgv')mountTermsDocument();
   if(route==='confirmation')window.SaylessCheckoutUI.checkStatus();
   if(route==='suivi')window.SaylessService.readTracking();
   updateCartCount();

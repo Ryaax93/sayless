@@ -28,6 +28,8 @@ const checkoutMessages = {
   request_pending: 'Une demande est déjà en cours d’envoi. Attends son résultat.',
   unauthenticated: 'Ce lien de suivi est invalide ou a expiré. Demande un nouveau lien.',
   not_found: 'Cette commande n’a pas pu être vérifiée. Contacte SAYLESS.',
+  terms_invalid: 'Le document des conditions de vente ne peut pas être vérifié. Actualise le récapitulatif ; le paiement reste bloqué.',
+  terms_unverifiable: 'La vérification des conditions de vente est indisponible sur ce navigateur. Le paiement reste bloqué.',
   terms_required: 'Lis et accepte les conditions générales de vente avant de continuer.',
   terms_outdated:
     'Les conditions de vente ont changé. Demande un nouveau récapitulatif et relis-les avant de les accepter.',
@@ -128,8 +130,11 @@ function quoteSummary(state, postcode) {
     : `<p class="small-text">${postcode ? 'Code postal · ' + escapeHTML(postcode) : 'Destination confirmée dans le devis.'}</p>`;
   const consent = state.attempt
     ? ''
-    : `<label class="terms-choice"><input id="accept-terms" type="checkbox" ${window.SaylessConfig.termsVersion !== q.terms_version ? 'disabled' : ''} ${state.accepted ? 'checked' : ''}>
-    <span>J’ai lu et j’accepte les <a href="/#/cgv" target="_blank" rel="noopener">conditions générales de vente</a> · version ${escapeHTML(q.terms_version)}.</span></label>${window.SaylessConfig.termsVersion === q.terms_version ? '' : '<p class="notice">Cette version des conditions n’est pas encore consultable ici. Le paiement reste fermé.</p>'}`;
+    : `<details class="checkout-terms" open><summary>Conditions de vente · version ${escapeHTML(q.terms_version)}</summary>
+    <div data-quote-terms class="terms-document" tabindex="0" role="region" aria-label="Texte intégral des conditions de vente"></div>
+    <a href="/#/cgv?v=${encodeURIComponent(q.terms_version)}" target="_blank" rel="noopener">Lire le document en pleine page (nouvel onglet)</a></details>
+    <label class="terms-choice"><input id="accept-terms" type="checkbox" ${!state.terms || state.phase === 'submitting' ? 'disabled' : ''} ${state.accepted ? 'checked' : ''}>
+    <span>J’ai lu et j’accepte ces conditions générales de vente · version ${escapeHTML(q.terms_version)}.</span></label>`;
   const challenge =
     !state.attempt || state.needsChallenge
       ? `<div id="checkout-challenge" aria-label="Vérification de sécurité"></div>
@@ -294,7 +299,7 @@ window.SaylessCheckoutUI = (() => {
       stock = window.SaylessInventory.current();
     const configured =
       window.SaylessConfig.checkoutEnabled &&
-      (s.attempt || (s.quote?.terms_version && window.SaylessConfig.termsVersion === s.quote.terms_version && window.SaylessConfig.turnstileSiteKey));
+      (s.attempt || (s.terms && window.SaylessConfig.turnstileSiteKey));
     const waiting = Date.now() < s.retryAt;
     const ready =
       !!configured &&
@@ -412,6 +417,8 @@ window.SaylessCheckoutUI = (() => {
     }
   }
   function mount() {
+    const documentNode = document.querySelector('[data-quote-terms]');
+    if (documentNode && flow.state.terms) documentNode.textContent = flow.state.terms.body;
     stockChanged();
     challenge();
   }
