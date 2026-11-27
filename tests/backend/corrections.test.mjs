@@ -404,7 +404,7 @@ test('R15 V13-B2 CGV : devis et réservation exigent le document archivé ; publ
     return true;
   };
   const raced = await b.api('POST', '/api/checkout', { ip: '10.215.0.3', headers: { 'Idempotency-Key': 'course-cgv-concurrente-0001' },
-    body: { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', quote_id: q2.body.id, terms_version: '2027-01', turnstile: 'jeton-test' } });
+    body: { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', quote_id: q2.body.id, terms_version: '2027-01', terms_sha256: q2.body.terms_sha256, turnstile: 'jeton-test' } });
   assert.deepEqual([raced.status, raced.body.error], [409, 'terms_outdated']);
   assert.equal(await b.count("SELECT COUNT(*) FROM orders WHERE idempotency_key = 'course-cgv-concurrente-0001'"), 0, 'lot entier annulé');
   // Version citée sans document : aucun devis, aucune commande, aucune réservation (contrôles SQL).
@@ -738,3 +738,33 @@ test('R21 V14-R1 : sauvegarde restaurée et lignes d’avant la migration datée
     { dedupe: 'email:order_confirmation:jamais', first_attempt_at: null, uncertain_since: null },
     { dedupe: 'discord:test:avant', first_attempt_at: 1000, uncertain_since: null }]);
 });
+
+// ---------- 7. API v1.5 : empreinte des CGV obligatoire pour une nouvelle tentative ----------
+test('R22 API v1.5 : sans empreinte ou avec une fausse, aucune réservation ; tentative v1.4 sans empreinte toujours reprise ; même clé, autre contenu refusé', async () => {
+  const b = await bench({ 'TEST-M': 3 });
+  const nothing = async () => [await b.count('SELECT COUNT(*) FROM orders'), await b.count('SELECT COUNT(*) FROM reservations'), b.stripe.created];
+  const attempt = (q, key, extra) => b.api('POST', '/api/checkout', { ip: '10.231.0.1', headers: { 'Idempotency-Key': key },
+    body: { items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', quote_id: q.body.id, terms_version: q.body.terms_version, turnstile: 'jeton-test', ...extra } });
+  const q = await b.quote([{ sku: 'TEST-M', quantity: 1 }], { ip: '10.231.0.1' });
+  const missing = await attempt(q, 'v15-sans-empreinte-0001', {});
+  assert.deepEqual([missing.status, missing.body.error, await nothing()], [400, 'invalid_request', [0, 0, 0]], 'absente : refus sans écriture');
+  const wrong = await attempt(q, 'v15-fausse-empreinte-01', { terms_sha256: 'a'.repeat(64) });
+  assert.deepEqual([wrong.status, wrong.body.error, await nothing()], [409, 'terms_outdated', [0, 0, 0]], 'fausse : nouveau consentement, rien de réservé');
+  const malformed = await attempt(q, 'v15-empreinte-invalide', { terms_sha256: 'ABC' });
+  assert.deepEqual([malformed.status, malformed.body.error, await nothing()], [400, 'invalid_request', [0, 0, 0]]);
+  const ok = await attempt(q, 'v15-empreinte-exacte-01', { terms_sha256: q.body.terms_sha256 });
+  assert.deepEqual([ok.status, await b.count('SELECT terms_sha256 FROM orders')], [200, q.body.terms_sha256]);
+  // Tentative créée par un client v1.4 sans empreinte (avant cette version) : même contenu = reprise.
+  const legacyKey = 'v14-tentative-sans-hash';
+  const q2 = await b.quote([{ sku: 'TEST-M', quantity: 1 }], { ip: '10.231.0.2' });
+  const created = await attempt(q2, legacyKey, { terms_sha256: q2.body.terms_sha256 });
+  assert.equal(created.status, 200);
+  const v14 = await sha256Hex(JSON.stringify({ items: [{ sku: 'TEST-M', quantity: 1 }], shipping: 'home', relayId: null, quote: q2.body.id, terms: q2.body.terms_version }));
+  await b.real.prepare('UPDATE orders SET request_fingerprint = ?, terms_sha256 = NULL WHERE idempotency_key = ?').bind(v14, legacyKey).run();
+  const resumed = await attempt(q2, legacyKey, {});
+  assert.deepEqual([resumed.status, resumed.body.url], [200, created.body.url], 'reprise identique, sans empreinte injectée après coup');
+  const changed = await attempt(q2, legacyKey, { terms_sha256: q2.body.terms_sha256 });
+  assert.deepEqual([changed.status, changed.body.error], [409, 'idempotency_conflict'], 'même clé, contenu différent : refusé');
+  assert.deepEqual([await b.count('SELECT COUNT(*) FROM orders'), b.stripe.created], [2, 2]);
+});
+

@@ -1,6 +1,16 @@
-# Contrat commun de la boutique — v1.4
+# Contrat commun de la boutique — v1.5
 
-**Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 et v1.2 implémentées par Claude et consommées par Work (`work/frontend-api-v1-2`) ; v1.3 = corrections de la revue de Work ; v1.4 = suite de la contre-revue v1.3 de Work (26 novembre), à valider par Work.** Les évolutions v1.3 et v1.4 sont additives : un client v1.3 continue de fonctionner (`terms_sha256` est facultatif au paiement pendant la transition). Rien n’est déployé. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+**Statut : v1 proposée par Work le 24 novembre 2026 ; v1.1 et v1.2 implémentées par Claude et consommées par Work (`work/frontend-api-v1-2`) ; v1.3 = corrections de la revue de Work ; v1.4 = suite de la contre-revue v1.3 de Work, raccordée par Work (`ea66e60`) ; v1.5 (27 novembre) = empreinte des CGV obligatoire pour toute nouvelle tentative de paiement, proposée par Work et compatible avec sa boutique v1.4.** Rien n’est déployé. Le paiement reste fermé par défaut (`payments_enabled = 0`, boutique en pause).
+
+## Changements v1.5 (27 novembre)
+
+- **`terms_sha256` obligatoire pour une nouvelle tentative** (`POST /api/checkout` avec une clé `Idempotency-Key` inconnue) :
+  - absente ou mal formée (64 caractères hexadécimaux minuscules) : `400 invalid_request` ;
+  - différente de l’empreinte du devis ou du texte archivé en vigueur : `409 terms_outdated` ;
+  - dans les deux cas, rien n’est écrit : aucune commande, aucune réservation, aucune session Stripe.
+- **Reprise** (clé déjà connue) : recherchée **avant** cette exigence. Une tentative créée sans empreinte par un client v1.4 se reprend avec exactement le corps d’origine, sans `terms_sha256` ; le serveur n’ajoute jamais d’empreinte après coup. Même clé avec un autre contenu, empreinte ajoutée comprise : `409 idempotency_conflict`.
+- **Compatibilité** : la boutique de Work (`ea66e60`) envoie déjà `terms_version` et `terms_sha256` pour chaque nouvelle tentative et conserve le corps d’origine pour les reprises ; ses 74 tests et ses 13 tests d’intégration passent contre ce serveur.
+- **E-mails clients (V14-R1)** : aucun changement d’interface. Un e-mail dont Resend n’a pas confirmé l’envoi est renvoyé avec la même clé d’idempotence pendant 23 heures au plus ; au-delà, il passe « à vérifier » dans STUDIO, sans renvoi automatique.
 
 ## Changements v1.4 (contre-revue v1.3 de Work, 26 novembre) — à valider par Work
 
@@ -16,7 +26,7 @@
   - `ETag: "<sha256>"`. Version précise : `Cache-Control: public, max-age=86400, immutable` (un texte publié ne change jamais) ; `/api/terms` : `max-age=0, must-revalidate`.
   - Erreurs : `404 not_found` (version inconnue), `503 not_configured` (aucune CGV publiée ou texte altéré).
 - **Affichage proposé côté boutique** : charger `terms_url` reçu dans le devis (pas `/api/terms`, qui peut changer entre-temps), vérifier côté navigateur que `sha256` = `terms_sha256` du devis (`crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))`), afficher ce texte, puis envoyer au paiement `terms_version` **et** `terms_sha256` reçus dans le devis. Si l’empreinte ne correspond pas : ne pas proposer « Payer », recharger le devis.
-- **Paiement** : `POST /api/checkout` accepte `terms_sha256`. Facultatif en v1.4 (compatibilité v1.3) ; s’il est présent, il doit avoir 64 caractères hexadécimaux minuscules (`400 invalid_request` sinon) et correspondre au devis et au texte archivé (`409 terms_outdated` sinon). **Proposition : obligatoire en v1.5**, une fois la boutique de Work mise à jour.
+- **Paiement** : `POST /api/checkout` accepte `terms_sha256`. Facultatif en v1.4 (compatibilité v1.3) ; s’il est présent, il doit avoir 64 caractères hexadécimaux minuscules (`400 invalid_request` sinon) et correspondre au devis et au texte archivé (`409 terms_outdated` sinon). **Obligatoire depuis v1.5** pour une nouvelle tentative (voir plus haut).
 - **CGV non archivées (V13-B2)** : devis refusé (`503 not_configured`) si le texte de la version en vigueur manque à l’archive ou ne correspond plus à son empreinte. La base refuse aussi toute réservation dans ce cas, et toute réservation dont la commande cite une autre version ou une autre empreinte que celles en vigueur : une publication de CGV concurrente pendant un paiement donne `409 terms_outdated`, sans commande créée. La reprise d’une tentative existante (même clé) n’est pas concernée.
 - **E-mails clients (V13-B1)** : aucun changement d’interface. Confirmation de commande, accusé des demandes et avis d’expédition sont désormais garantis côté serveur : une panne de la file d’envoi est réparée automatiquement, sans seconde entrée en file ; l’envoi est protégé contre les doublons pendant les 24 h de la clé d’idempotence de Resend, puis passe « à vérifier » (v1.5).
 
@@ -141,7 +151,7 @@ Relais (v1.3) : `"relay": {"id", "label", "network", "postcode", "city", "addres
   "relay_id": null,
   "quote_id": "<id du devis>",
   "terms_version": "<version acceptée des CGV>",
-  "terms_sha256": "<empreinte du texte affiché, reçue dans le devis (v1.4, facultatif)>",
+  "terms_sha256": "<empreinte du texte affiché, reçue dans le devis (obligatoire en v1.5 pour une nouvelle tentative)>",
   "turnstile": "<jeton anti-abus>"
 }
 ```

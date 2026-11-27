@@ -206,7 +206,9 @@ export async function startCheckout(env, input, deps) {
   const items = normalizeItems(body.items, Number(settings.max_items_per_order || 1));
   const relayId = body.shipping === 'relay' ? body.relay_id : null;
   if (typeof body.terms_version !== 'string' || !body.terms_version || body.terms_version.length > 40) throw fail('invalid_request');
-  // Empreinte du document affiché (contrat v1.4) : facultative pour les clients v1.3, vérifiée si fournie.
+  // Empreinte du document affiché : obligatoire pour toute nouvelle tentative (contrat v1.5), absente
+  // seulement à la reprise d'une tentative créée sans elle (v1.4), dont l'empreinte de contenu ne
+  // l'incluait pas. Fournie, elle doit être bien formée.
   if (body.terms_sha256 !== undefined && (typeof body.terms_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(body.terms_sha256))) throw fail('invalid_request');
   const fingerprint = await sha256Hex(JSON.stringify({ items, shipping: body.shipping, relayId, quote: body.quote_id, terms: body.terms_version,
     ...(body.terms_sha256 ? { terms_sha256: body.terms_sha256 } : {}) }));
@@ -216,19 +218,21 @@ export async function startCheckout(env, input, deps) {
   const existing = await one(db, 'SELECT * FROM orders WHERE idempotency_key = ?', idempotencyKey);
   if (existing) return resumeCheckout(env, existing, fingerprint, deps);
 
-  // 2. Nouvelle tentative : devis valide et identique, CGV en vigueur, chiffrement prêt, ventes ouvertes.
+  // 2. Nouvelle tentative : empreinte des CGV fournie (v1.5), devis valide et identique, CGV en
+  //    vigueur, chiffrement prêt, ventes ouvertes. Aucun refus ci-dessous n'écrit quoi que ce soit.
+  if (body.terms_sha256 === undefined) throw fail('invalid_request');
   if (!(quote.exp > now)) throw fail('quote_expired');
   const sameItems = JSON.stringify(items.map((i) => [i.sku, i.quantity])) === JSON.stringify(quote.items.map(([s, q]) => [s, q]));
   if (!sameItems || body.shipping !== quote.shipping || (relayId ?? null) !== (quote.relay?.id ?? null)) throw fail('quote_mismatch');
   // CGV : le consentement doit porter sur la version en vigueur (sinon nouveau consentement, 409),
   // dont le texte archivé doit être intact (sinon aucune vente, 503), avec la même empreinte que le
-  // devis et que le document affiché si le client l'indique. La base refait ces contrôles en réservant.
+  // devis et que le document affiché. La base refait ces contrôles en réservant.
   const current = settings.terms_version || '';
   if (current && (body.terms_version !== current || quote.t !== current)) throw fail('terms_outdated');
   const terms = await termsDocument(db).catch(() => { throw fail('service_unavailable'); });
   if (!terms?.intact) throw fail('not_configured');
-  if (body.terms_version !== terms.version || quote.t !== terms.version || (quote.h !== undefined && quote.h !== terms.sha256)
-    || (body.terms_sha256 !== undefined && body.terms_sha256 !== terms.sha256)) throw fail('terms_outdated');
+  if (body.terms_version !== terms.version || quote.t !== terms.version || quote.h !== terms.sha256
+    || body.terms_sha256 !== terms.sha256) throw fail('terms_outdated');
   if (settings.shop_mode !== 'open') throw fail('paused');
   if (settings.payments_enabled !== '1' || !deps.stripe) throw fail('payments_disabled');
   // Coordonnées de livraison chiffrées obligatoires : sans clé valide, aucun paiement n'est ouvert.

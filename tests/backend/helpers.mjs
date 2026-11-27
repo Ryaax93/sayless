@@ -355,7 +355,7 @@ function helpersFor(b) {
       const q = quote ?? (await api('POST', '/api/quote', { body: { items: lines, shipping, relay_id, postcode: shipping === 'home' ? postcode : undefined }, ip }));
       if (q.status !== 200) return { ...q, stage: 'quote' };
       const res = await api('POST', '/api/checkout', { ip, headers: { 'Idempotency-Key': key },
-        body: { items: lines, shipping, relay_id, quote_id: q.body.id, terms_version: '2026-11', turnstile: 'jeton-test' } });
+        body: { items: lines, shipping, relay_id, quote_id: q.body.id, terms_version: '2026-11', terms_sha256: q.body.terms_sha256, turnstile: 'jeton-test' } });
       const sid = res.body.url ? res.body.url.split('/').pop() : null;
       return { ...res, sid, key, quote: q };
     },
