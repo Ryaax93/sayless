@@ -120,3 +120,11 @@ C'est le premier vrai essai de Face ID. Les tests automatiques utilisent un auth
 | Transporteur (Boxtal) | — | Non opérationnel : en attente des confirmations écrites |
 
 Métriques à relever après 24 heures : Cloudflare > Workers & Pages > `sayless-ops-test` > Métriques. Note le nombre d'erreurs (attendu : 0) et le temps de calcul médian et maximal (limite gratuite : 10 ms). C'est la seule limite qu'on ne peut pas mesurer sur un ordinateur. Aucune montée de forfait n'est automatique.
+
+## E. Mettre à jour TEST sans rien perdre
+
+Pour installer une correction sur l'environnement TEST existant (base D1, secrets, sauvegardes et Face ID conservés), suis `docs/NOTIFICATIONS-PUSH.md`, section 5 :
+
+- **bloc A** : récupérer et vérifier le code ;
+- **bloc B** : diagnostic en lecture seule ;
+- **bloc C** : mise à jour, avec point de restauration de la base.

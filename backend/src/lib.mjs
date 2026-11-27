@@ -11,7 +11,7 @@ export const ERROR_STATUS = Object.freeze({
   sold_out: 409, held: 409, quote_expired: 409, quote_invalid: 409, price_changed: 409, quote_mismatch: 409,
   idempotency_conflict: 409, checkout_in_progress: 409, attempt_closed: 409, terms_outdated: 409,
   stale_revision: 409, quantity_below_reservations: 409, terms_version_exists: 409, not_ready: 409,
-  order_not_reviewable: 409, refund_not_allowed: 409, order_not_shippable: 409, last_device: 409, insufficient_stock: 409,
+  order_not_reviewable: 409, refund_not_allowed: 409, order_not_shippable: 409, last_device: 409, insufficient_stock: 409, push_key_mismatch: 409,
   payload_too_large: 413, unsupported_media_type: 415,
   invalid_items: 422, quantity_not_supported: 422, relay_required: 422, invalid_relay: 422,
   destination_not_supported: 422, postcode_required: 422,

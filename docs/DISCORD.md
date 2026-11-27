@@ -23,6 +23,8 @@ Les salons sans automatisme (direction artistique, contenus, futurs drops) reste
 
 Discord limite le débit. Quand il demande d'attendre (réponse 429), le message repart au délai indiqué, sans être abandonné. Discord n'a pas de protection contre les doublons : dans de rares cas de réponse perdue, un message peut arriver deux fois.
 
+Webhook supprimé ou refusé (400, 401, 403, 404) : le message est abandonné sans réessais inutiles. Une seule alerte part alors par l'iPhone et reste dans STUDIO ; elle ne passe jamais par Discord, et au plus un rappel par jour suit tant que la panne dure (`docs/NOTIFICATIONS-PUSH.md`).
+
 ## 1. Créer un webhook dans Discord
 
 Sur ordinateur, dans le serveur privé SAYLESS (il faut le droit « Gérer les webhooks ») :

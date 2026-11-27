@@ -184,7 +184,7 @@ test('U06 notifications, santé et historique : centre de notifications, canaux 
   await b.buy(SKU.M, '10.143.0.1');
   const n = (await b.call('GET', '/api/admin/notifications')).body;
   assert.ok(n.notifications.some((x) => x.kind === 'order_paid' && x.order_id));
-  assert.deepEqual(n.channels, { discord: false, push: { configured: false, devices: 0, public_key: null }, email: false });
+  assert.deepEqual(n.channels, { discord: false, push: { configured: false, devices: 0, device_list: [], failing: null, public_key: null }, email: false });
   assert.equal((await b.call('POST', '/api/admin/notifications/read', { all: true })).body.unread, 0);
   const h = (await b.call('GET', '/api/admin/health')).body;
   const byName = Object.fromEntries(h.checks.map((c) => [c.name, c.state]));
@@ -200,7 +200,7 @@ test('U06 notifications, santé et historique : centre de notifications, canaux 
   assert.equal((await b.api('GET', '/api/stock?product_id=drop02-noir')).body.error, 'unknown_product', 'brouillon invisible côté boutique');
 });
 
-test('U07 iPhone : abonnement validé, message chiffré (RFC 8291) déchiffrable par l’appareil, signature VAPID, appareil retiré si expiré', async () => {
+test('U07 iPhone : abonnement validé, message chiffré (RFC 8291) déchiffrable par l’appareil, signature VAPID, appareil expiré gardé mais plus utilisé', async () => {
   const b = await signedIn();
   const vapid = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const jwk = await crypto.subtle.exportKey('jwk', vapid.privateKey);
@@ -230,15 +230,17 @@ test('U07 iPhone : abonnement validé, message chiffré (RFC 8291) déchiffrable
   const [h, c, sig] = jwt.split('.');
   assert.ok(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, vapid.publicKey, fromB64url(sig), te.encode(`${h}.${c}`)));
   assert.deepEqual([k, JSON.parse(new TextDecoder().decode(fromB64url(c))).aud], [b64url(pub), 'https://web.push.apple.com']);
-  // Envoi : 201 = remis ; 410 = abonnement expiré, retiré.
+  // Envoi : 201 = remis ; 410 = abonnement expiré, gardé pour le diagnostic mais plus utilisé.
   const calls = [];
   let status = 201;
-  const send = pushSender(b.env, async (url, init) => { calls.push({ url, init }); return new Response(null, { status }); });
+  const send = pushSender(b.env, async (url, init) => { calls.push({ url, init }); return new Response(null, { status }); }, () => b.clock.now());
   await send({ kind: 'order_paid', level: 'info', title: 'Nouvelle commande', body: '1 × taille M' });
   assert.equal(calls[0].init.headers['Content-Encoding'], 'aes128gcm');
   status = 410;
-  await assert.rejects(send({ kind: 'test', level: 'info', title: 't', body: 't' }));
-  assert.equal(await b.count('SELECT COUNT(*) FROM push_subscriptions'), 0);
+  await assert.rejects(send({ kind: 'test', level: 'info', title: 't', body: 't' }), (e) => e.noDevice === true && e.detail === 'apple_410');
+  assert.deepEqual([await b.count('SELECT COUNT(*) FROM push_subscriptions'), await b.count('SELECT COUNT(*) FROM push_subscriptions WHERE expired_at IS NULL')], [1, 0]);
+  await assert.rejects(send({ kind: 'test', level: 'info', title: 't', body: 't' }), (e) => e.noDevice === true);
+  assert.equal(calls.length, 2, 'abonnement expiré : plus aucun envoi vers Apple');
 });
 
 test('U08 demandes et suivi : accusé de réception par e-mail après enregistrement, lien de suivi sans énumération, e-mails de commande', async () => {

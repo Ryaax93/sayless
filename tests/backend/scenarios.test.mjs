@@ -283,7 +283,7 @@ test('t19 alertes sans doublon : 12 ventes, webhooks reçus 3 fois', async () =>
   assert.equal(await b.count("SELECT COUNT(*) FROM outbox WHERE dedupe LIKE 'discord:order_paid:%'"), 12);
 });
 
-test('t20 Discord : aucune donnée personnelle ; panne = renvoi unique ; 5 échecs = alerte technique', async () => {
+test('t20 Discord : aucune donnée personnelle ; panne = renvoi unique ; 5 échecs = une alerte de panne, jamais par Discord', async () => {
   const b = await bench({ 'TEST-M': 3 });
   await b.buy('TEST-M', '10.20.0.1', { customer: PII });
   const payloads = (await b.rows('SELECT payload FROM outbox')).map((r) => r.payload).join(' ')
@@ -304,7 +304,8 @@ test('t20 Discord : aucune donnée personnelle ; panne = renvoi unique ; 5 éche
     await run(b, (ctx, deps) => deliverOutbox(ctx, down, deps));
   }
   assert.equal(await b.count("SELECT status FROM outbox WHERE dedupe = 'discord:test:dead'"), 'dead');
-  assert.equal(await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'technical' AND level = 'critical'"), 1);
+  assert.equal(await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'channel_failure' AND level = 'critical'"), 1);
+  assert.equal(await b.count("SELECT COUNT(*) FROM outbox WHERE dedupe LIKE 'discord:channel_failure:%'"), 0, 'alerte de panne Discord jamais envoyée par Discord');
 });
 
 test('t21 ancien lien 1.0 : vente décomptée une fois ; sans stock = alerte ; renvois sans doublon', async () => {

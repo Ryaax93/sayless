@@ -55,6 +55,7 @@ const MESSAGES = {
   unsupported: 'Ce navigateur ne gère pas les passkeys. Utilise Safari sur iPhone ou sur Mac.',
   push_denied: 'Notifications refusées dans les réglages de l’iPhone.',
   push_unavailable: 'Installe d’abord STUDIO sur l’écran d’accueil (Partager, puis « Sur l’écran d’accueil »).',
+  push_key_mismatch: 'Abonnement créé avec une ancienne clé : touche « Activer » de nouveau.',
 };
 const message = (code) => MESSAGES[code] ?? 'Action impossible pour le moment. Réessaie dans un instant.';
 
@@ -467,13 +468,19 @@ const screens = {
     }
     const ch = d.channels;
     const pushHere = state.pushHere;
+    // Abonnement de cet iPhone connu et actif côté serveur, avec la clé actuelle.
+    const pushKnown = Boolean(state.pushFp && (ch.push.device_list ?? []).some((x) => x.active && x.fp === state.pushFp)
+      && (!state.pushKey || state.pushKey === ch.push.public_key));
     return `<header class="top">${nav('today', `${I.back} Aujourd’hui`, { cls: 'back' })}<span class="s">${esc(plural(d.unread, 'nouvelle'))}</span></header>
     <div class="body fade"><h1 class="h1 screen-title" tabindex="-1" data-fk="title">Notifications</h1>${errorBox()}${noticeBox()}
       <div class="sheet">
         <div class="row"><span class="grow"><span class="p strong block">Discord</span><span class="s block">${ch.discord ? 'Salon privé configuré' : 'Webhook d’un salon privé à saisir dans Cloudflare'}</span></span>${pill(ch.discord ? 'Actif' : 'À configurer', ch.discord ? 'on' : 'wait')}</div>
         <div class="row"><span class="grow"><span class="p strong block">Sur cet iPhone</span><span class="s block">${!ch.push.configured ? 'Clés de notification à saisir dans Cloudflare'
-    : pushHere ? 'Activées sur cet appareil' : 'Dès que STUDIO est sur ton écran d’accueil'}</span></span>
-          ${ch.push.configured && !pushHere ? btn('push-enable', 'Activer', { cls: 'pill tall' }) : pill(pushHere ? 'Actif' : 'À configurer', pushHere ? 'on' : 'wait')}</div>
+    : pushHere && !pushKnown ? 'Abonnement inconnu du serveur, expiré ou créé avec une ancienne clé : touche « Activer »'
+      : pushHere ? (ch.push.failing ? `Activées. ${ch.push.failing}` : 'Activées sur cet appareil') : 'Dès que STUDIO est sur ton écran d’accueil'}</span></span>
+          ${ch.push.configured && (!pushHere || !pushKnown) ? btn('push-enable', 'Activer', { cls: 'pill tall' }) : pill(pushHere ? 'Actif' : 'À configurer', pushHere ? 'on' : 'wait')}</div>
+        ${ch.push.configured && pushHere && pushKnown ? `<div class="row top-align"><span class="grow"><span class="p strong block">Essai de notification</span><span class="s block">${state.pushTest
+    ? esc(pushTestText(state.pushTest)) : 'Envoie une notification à cet iPhone et affiche la réponse d’Apple.'}</span></span>${btn('push-test', 'Envoyer un essai', { cls: 'pill tall' })}</div>` : ''}
         <div class="row"><span class="grow"><span class="p strong block">E-mails aux clients</span><span class="s block">${ch.email ? 'Confirmations et suivi envoyés' : 'Resend et un domaine vérifié à configurer'}</span></span>${pill(ch.email ? 'Actif' : 'À configurer', ch.email ? 'on' : 'wait')}</div>
       </div>
       ${d.unread ? btn('read-all', 'Tout marquer comme lu', { cls: 'btn ghost' }) : ''}
@@ -538,6 +545,11 @@ const screens = {
     const tone = { ok: ['OK', ''], todo: ['À faire', 'wait'], wait: ['En attente', 'wait'], alert: ['Alerte', 'warn'] };
     return `${header('Santé du site', { back: ['more', 'Plus'], right: `<span class="s">${esc(h.environment)}</span>` })}<div class="body fade">${errorBox()}${noticeBox()}
       <div class="sheet">${h.checks.map((c) => `<div class="row top-align"><span class="grow"><span class="p strong block">${esc(c.name)}</span><span class="s block">${esc(c.detail)}</span></span>${pill(...tone[c.state])}</div>`).join('')}</div>
+      ${h.outbox?.closable ? `<section aria-labelledby="echecs"><h2 class="sec" id="echecs">Envois échoués</h2><div class="sheet">
+        ${h.outbox.groups.map((g) => `<div class="row top-align"><span class="grow"><span class="p strong block">${esc({ push: 'iPhone', discord: 'Discord', email: 'E-mail client' }[g.channel] ?? g.channel)} · ${esc(plural(g.n, 'message'))}</span>
+        <span class="s block">${esc(g.explanation)}</span></span></div>`).join('')}
+        <div class="row top-align"><span class="grow"><span class="p block">${esc(plural(h.outbox.closable, 'envoi'))} à clôturer</span>
+        <span class="s block">Discord et iPhone seulement. Ils restent dans l’historique ; aucun e-mail client n’est touché.</span></span>${btn('outbox-close', 'Clôturer', { cls: 'pill tall' })}</div></div></section>` : ''}
       ${h.uncertain?.length ? `<section aria-labelledby="a-verifier"><h2 class="sec" id="a-verifier">E-mails à vérifier</h2><div class="sheet">
         ${h.uncertain.map((u) => `<div class="row top-align"><span class="grow"><span class="p strong block">${esc(u.label)}${u.reference ? ` ${esc(u.reference)}` : ''}</span>
         <span class="s block">Premier essai ${esc((u.first_attempt_at ?? '').slice(0, 16).replace('T', ' '))} UTC · ${esc(u.attempts)} essai(s)${u.provider_ref ? ` · Resend ${esc(u.provider_ref)}` : ''}</span></span>
@@ -563,7 +575,7 @@ const screens = {
       export_orders: 'Export des commandes', order_prepared: 'Commande préparée', order_shipped: 'Commande expédiée', order_delivered: 'Commande remise', order_review_resolved: 'Commande vérifiée',
       refund_requested: 'Remboursement demandé', refund_recorded: 'Remboursement enregistré', return_check: 'Retour contrôlé', shop_opened: 'Boutique ouverte', shop_paused: 'Boutique en pause',
       settings_changed: 'Réglages modifiés', backup_downloaded: 'Sauvegarde téléchargée', email_reconciled: 'E-mail rapproché', terms_published: 'CGV publiées', legacy_link_sale: 'Vente lien 1.0', legacy_sync: 'Synchronisation lien 1.0', drop_declared: 'Quantités déclarées',
-      product_drafted: 'Produit en brouillon', product_status: 'Statut de produit', price_changed: 'Prix modifié', finance_settings: 'Déclarations financières', push_subscribed: 'Notifications activées',
+      product_drafted: 'Produit en brouillon', product_status: 'Statut de produit', price_changed: 'Prix modifié', finance_settings: 'Déclarations financières', push_subscribed: 'Notifications activées', push_test: 'Essai de notification iPhone', outbox_closed: 'Envois échoués clôturés',
       request_received: 'Demande reçue', request_status: 'Demande traitée', notification_resolved: 'Alerte traitée', purge_customer_contacts: 'Coordonnées purgées', import_sale: 'Vente importée' };
     return `${header('Historique', { back: ['health', 'Santé du site'] })}<div class="body fade">${errorBox()}<div class="sheet">
       ${!d ? loadingBox() : d.entries.length ? d.entries.map((e) => `<div class="row"><span class="grow"><span class="p block">${esc(names[e.action] ?? e.action)}</span>
@@ -769,14 +781,31 @@ function download(name, text, type = 'text/csv;charset=utf-8') {
 
 // ---------- notifications sur l'iPhone ----------
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+// Empreinte de l'abonnement (même calcul que le serveur) et clé avec laquelle il a été créé : STUDIO
+// compare sans jamais afficher l'adresse de l'abonnement.
+async function fingerprint(text) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return [...digest.slice(0, 6)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+const subscriptionKey = (sub) => (sub?.options?.applicationServerKey ? b64.enc(sub.options.applicationServerKey) : null);
 async function checkPush() {
   if (!pushSupported()) return;
   try {
     const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-    state.pushHere = Boolean(await reg.pushManager.getSubscription());
+    const sub = await reg.pushManager.getSubscription();
+    state.pushHere = Boolean(sub);
+    state.pushFp = sub ? await fingerprint(sub.endpoint) : null;
+    state.pushKey = subscriptionKey(sub);
   } catch {
     state.pushHere = false;
   }
+  if (state.screen === 'notifications' && state.data.notifications) set({}); // état de cet iPhone lu après l'écran
+}
+function pushTestText(r) {
+  if (!r.keys.keypair) return 'Clés VAPID du serveur incohérentes : Apple refusera chaque envoi. Regénère les clés de test.';
+  if (r.this_device === 'unknown') return 'Cet iPhone n’est pas abonné côté serveur : touche « Activer ».';
+  if (!r.devices.length) return 'Aucun appareil abonné côté serveur : touche « Activer ».';
+  return r.devices.map((x) => `${x.label} : ${x.explanation}${x.status ? ` (réponse ${x.status}${x.reason ? ` ${x.reason}` : ''})` : ''}`).join(' ');
 }
 
 // ---------- actions ----------
@@ -879,11 +908,34 @@ const actions = {
       const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
       await navigator.serviceWorker.ready;
       const key = state.data.notifications.channels.push.public_key;
-      const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64.dec(key) }));
+      let sub = await reg.pushManager.getSubscription();
+      // Abonnement créé avec une autre clé (installation précédente) : Apple le refuserait. Remplacé.
+      if (sub && subscriptionKey(sub) && subscriptionKey(sub) !== key) {
+        await sub.unsubscribe();
+        sub = null;
+      }
+      sub = sub ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64.dec(key) }));
       const json = sub.toJSON();
-      await api('/api/admin/push/subscribe', { endpoint: json.endpoint, keys: json.keys, label: deviceLabel() });
-      state.pushHere = true;
+      await api('/api/admin/push/subscribe', { endpoint: json.endpoint, keys: json.keys, label: deviceLabel(), ...(subscriptionKey(sub) ? { key: subscriptionKey(sub) } : {}) });
+      await checkPush();
+      state.pushTest = null;
       await load('notifications');
+      set({ notice: 'Notifications activées. Touche « Envoyer un essai » pour vérifier.' });
+    });
+  },
+  'push-test': () => guarded(async () => {
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    const sub = await reg?.pushManager.getSubscription();
+    const result = await api('/api/admin/push/test', sub ? { endpoint: sub.endpoint } : {});
+    await load('notifications');
+    set({ pushTest: result });
+  }),
+  'outbox-close': () => {
+    if (!window.confirm('Clôturer les envois échoués vers Discord et l’iPhone ? Ils restent dans l’historique ; aucun e-mail client n’est touché.')) return undefined;
+    return sensitive(async () => {
+      const r = await api('/api/admin/outbox/close', { scope: 'failed' });
+      await load('health');
+      set({ notice: `${plural(r.closed, 'envoi')} clôturé(s), ${plural(r.alerts, 'alerte')} résolue(s). L’historique est conservé.` });
     });
   },
   declare: (el) => {

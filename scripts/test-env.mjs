@@ -7,6 +7,7 @@
 //   node scripts/test-env.mjs secret NOM    saisit un secret (Discord, Resend, Stripe test) sans l'afficher
 //   node scripts/test-env.mjs reglage NOM valeur    règle une valeur non secrète (EMAIL_FROM, EMAIL_REPLY_TO)
 //   node scripts/test-env.mjs compte ID     choisit le compte Cloudflare s'il y en a plusieurs
+//   node scripts/test-env.mjs diagnostic    état des notifications, en lecture seule (codes et nombres)
 //
 // Ce que l'assistant fait : une base D1 « sayless-test », un espace de sauvegarde, le Worker
 // « sayless-ops-test » sur une adresse *.workers.dev. Rien d'autre : ni domaine, ni DNS, ni
@@ -206,6 +207,18 @@ async function install() {
   done(`espace ${NAMESPACE}`);
 
   step(5, 'Tables de la base (migrations)');
+  // Point de restauration noté avant toute migration (Time Travel de D1, gardé 7 jours sur l'offre
+  // gratuite) : en cas de problème, la base revient à cet instant sans toucher au reste.
+  const travel = wrangler(['d1', 'time-travel', 'info', DATABASE, '--json', '-c', CONFIG]);
+  const bookmark = travel.code === 0 ? (parseJson(travel.out, '{')?.bookmark ?? `${travel.out}`.match(/\b[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{32}\b/)?.[0] ?? null) : null;
+  if (bookmark) {
+    state.restore_point = { bookmark, at: new Date().toISOString() };
+    save();
+    say(`   Point de restauration de la base : ${bookmark}`);
+    say(`   (au besoin : npx wrangler d1 time-travel restore ${DATABASE} --bookmark=${bookmark} -c ${CONFIG})`);
+  } else {
+    say(`   Point de restauration non lu : Time Travel reste possible à la minute près pendant 7 jours (${new Date().toISOString()}).`);
+  }
   const migrated = wrangler(['d1', 'migrations', 'apply', DATABASE, '--remote', '-c', CONFIG]);
   if (migrated.code !== 0) stop('Les migrations ont échoué :', tail(migrated));
   done(/No migrations to apply/.test(migrated.out) ? 'déjà à jour' : 'appliquées');
@@ -321,7 +334,47 @@ async function main() {
     if (r.code !== 0) stop('Mise en ligne refusée :', tail(r));
     return say(`${name} réglé et mis en ligne.`);
   }
-  stop('Commandes : (aucune), etat, secret NOM, reglage NOM valeur, compte ID');
+  if (command === 'diagnostic') return diagnostic();
+  stop('Commandes : (aucune), etat, diagnostic, secret NOM, reglage NOM valeur, compte ID');
+}
+
+// Diagnostic des notifications, en lecture seule (SELECT uniquement) : envois en échec par canal et
+// par code, appareils iPhone (nombres et dates), premières alertes. Aucune adresse d'abonnement,
+// clé, contenu de message ni donnée de client n'est lu. Requêtes valables avant et après la
+// migration 0009, pour comprendre une panne avant la mise à jour.
+function diagnostic() {
+  if (!existsSync(CONFIG)) stop('Environnement pas encore installé. Lance : node scripts/test-env.mjs');
+  const read = (sqlText) => {
+    const r = wrangler(['d1', 'execute', DATABASE, '--remote', '--json', '--command', sqlText, '-c', CONFIG]);
+    if (r.code !== 0) stop('Lecture de la base impossible :', tail(r));
+    return parseJson(r.out, '[')?.[0]?.results ?? [];
+  };
+  const when = (t) => (t ? new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .format(new Date(Number(t) * 1000)) : '—');
+  say('Diagnostic des notifications (lecture seule : rien n’est modifié ; ni adresse, ni clé, ni donnée de client)');
+  say('\nEnvois non remis, par canal, état et code :');
+  const failed = read(`SELECT channel, status, COALESCE(last_error, '-') AS code, COUNT(*) AS n, MIN(at) AS premier, MAX(at) AS dernier
+    FROM outbox WHERE status <> 'sent' GROUP BY channel, status, code ORDER BY n DESC LIMIT 15`);
+  if (!failed.length) say('  aucun');
+  for (const r of failed) say(`  ${r.channel} · ${r.status} · ${r.code} : ${r.n} (du ${when(r.premier)} au ${when(r.dernier)})`);
+  const [devices] = read(`SELECT COUNT(*) AS n, COALESCE(SUM(failures), 0) AS echecs, MIN(created_at) AS premier, MAX(created_at) AS dernier,
+    MAX(last_ok_at) AS succes FROM push_subscriptions`);
+  say(`
+Appareils iPhone enregistrés : ${devices?.n ?? 0} (abonnement du ${when(devices?.premier)}${devices?.n > 1 ? ` au ${when(devices?.dernier)}` : ''}) ; `
+    + `échecs comptés : ${devices?.echecs ?? 0} ; dernier envoi accepté : ${when(devices?.succes)}`);
+  say('\nPremières notifications, par type :');
+  for (const r of read(`SELECT kind, COUNT(*) AS n, MIN(at) AS premier FROM notifications GROUP BY kind ORDER BY premier LIMIT 20`)) {
+    say(`  ${r.kind} : ${r.n} (première le ${when(r.premier)})`);
+  }
+  if (read(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_health'`).length) {
+    say('\nÉtat des canaux (après la mise à jour) :');
+    for (const r of read('SELECT channel, state, failures, last_error, since, last_ok_at FROM channel_health ORDER BY channel')) {
+      say(`  ${r.channel} : ${r.state === 'failing' ? `en échec depuis le ${when(r.since)}, ${r.failures} message(s), ${r.last_error}` : 'OK'} ; dernier succès : ${when(r.last_ok_at)}`);
+    }
+  }
+  say('\nLecture : « aucun appareil abonné » = aucun iPhone enregistré côté serveur au moment de l’envoi ;'
+    + ' « aucune notification remise » = Apple a refusé ou n’a pas répondu (code exact visible après la mise à jour, essai depuis STUDIO).');
+  return true;
 }
 
 main().then((ok) => { if (ok === false) process.exitCode = 1; }).catch((e) => {

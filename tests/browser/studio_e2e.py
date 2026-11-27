@@ -45,10 +45,14 @@ def main():
     try:
         with open(os.path.join(keys, "public.json")) as f:
             public = f.read()
+        # Clés VAPID de test (jetables) : l'écran Santé contrôle la paire dans le vrai moteur workerd.
+        vapid = json.loads(run(["node", "-e", VAPID_JS]).stdout)
         with open(vars_path, "w") as f:
             f.write("\n".join([f"APP_SECRET={b64(32)}", f"PII_KEY={b64(32)}", f"ADMIN_SETUP_CODE={SETUP}",
                                f"STUDIO_ORIGIN={ORIGIN}", "STUDIO_RP_ID=localhost", "ENVIRONMENT=local",
-                               "TURNSTILE_BYPASS=test-only", f"BACKUP_PUBLIC_KEY='{public}'"]) + "\n")
+                               "TURNSTILE_BYPASS=test-only", f"BACKUP_PUBLIC_KEY='{public}'",
+                               f"VAPID_PUBLIC_KEY={vapid['public']}", f"VAPID_PRIVATE_KEY={vapid['private']}",
+                               "VAPID_SUBJECT=https://saylessbrand.fr"]) + "\n")
         run(["npx", "wrangler", "d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "-c", "ops/wrangler.toml"], env=env)
         with open(os.path.join(keys, "metadata.json")) as f:
             metadata = f.read()
@@ -61,7 +65,7 @@ def main():
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, preexec_fn=os.setsid)
         try:
             wait_ready()
-            browse(lambda: seed(state, env), keys)
+            browse(lambda: seed(state, env), keys, lambda: seed(state, env, SEED_FAILURES))
         finally:
             os.killpg(server.pid, signal.SIGTERM)
             server.wait(timeout=20)
@@ -92,8 +96,26 @@ INSERT INTO order_items (order_id, line, product_id, sku, quantity, unit_price_c
 """
 
 
-def seed(state, env):
-    run(["npx", "wrangler", "d1", "execute", "DB", "--local", "--persist-to", state, "-c", "ops/wrangler.toml", "--command", SEED], env=env)
+def seed(state, env, sql=None):
+    run(["npx", "wrangler", "d1", "execute", "DB", "--local", "--persist-to", state, "-c", "ops/wrangler.toml", "--command", sql or SEED], env=env)
+
+
+VAPID_JS = ("const k = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);"
+            "const pub = Buffer.from(await crypto.subtle.exportKey('raw', k.publicKey)).toString('base64url');"
+            "console.log(JSON.stringify({ public: pub, private: (await crypto.subtle.exportKey('jwk', k.privateKey)).d }));")
+VAPID_JS = f"(async () => {{ {VAPID_JS} }})()"
+
+# État laissé par l'ancienne boucle des notifications push (avant le correctif du 27 novembre) :
+# messages iPhone abandonnés, alerte de boucle encore en attente, alertes « technical » dans STUDIO.
+SEED_FAILURES = " ".join([
+    "INSERT INTO outbox (channel, dedupe, payload, status, attempts, next_at, at, last_error) VALUES",
+    "('push', 'push:daily_report:e2e', '{\"kind\":\"daily_report\",\"title\":\"Rapport\",\"body\":\"Essai\"}', 'dead', 5, 0, 1800000000, 'aucune notification remise'),",
+    "('push', 'push:technical:outbox:1', '{\"kind\":\"technical\",\"title\":\"Notification non distribuée\",\"body\":\"Canal push : échec après 5 essais.\"}', 'dead', 5, 0, 1800000000, 'aucune notification remise'),",
+    "('push', 'push:technical:outbox:2', '{\"kind\":\"technical\",\"title\":\"Notification non distribuée\",\"body\":\"Canal push : échec après 5 essais.\"}', 'pending', 2, 4102444800, 1800000000, NULL);",
+    "INSERT INTO notifications (kind, ref, level, title, body, at) VALUES",
+    "('technical', 'outbox:1', 'critical', 'Notification non distribuée', 'Canal push : échec après 5 essais.', 1800000000),",
+    "('technical', 'outbox:2', 'critical', 'Notification non distribuée', 'Canal push : échec après 5 essais.', 1800000000);",
+])
 
 
 def wait_ready():
@@ -110,7 +132,7 @@ def wait_ready():
     raise SystemExit("le Worker local n'a pas démarré")
 
 
-def browse(seed_orders, keys):
+def browse(seed_orders, keys, seed_failures):
     problems = []
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--no-first-run", "--ignore-certificate-errors"])
@@ -207,6 +229,28 @@ def browse(seed_orders, keys):
         shot("14b-sante-sauvegarde")
         drill = run(["node", "scripts/restore-backup.mjs", "--backup", target, "--key", os.path.join(keys, "private.json")])
         assert "Contrôle réussi" in drill.stdout, drill.stdout + drill.stderr
+
+        # Notifications iPhone : clés contrôlées dans workerd, aucun appareil = en attente (pas une
+        # panne). Clôture des envois échoués de l'ancienne boucle, sous Face ID, historique conservé.
+        page.goto(f"{ORIGIN}/#/notifications")
+        page.wait_for_selector("text=Sur cet iPhone")
+        page.wait_for_timeout(600)
+        shot("11b-notifications-iphone")
+        seed_failures()
+        page.goto(f"{ORIGIN}/#/sante")
+        page.wait_for_selector("[data-action=outbox-close]")
+        line = page.locator(".row", has_text="Notifications iPhone").first.inner_text()
+        assert "Aucun iPhone abonné" in line, line
+        assert "3 envois à clôturer" in page.locator("#echecs + .sheet").inner_text()
+        page.wait_for_timeout(600)
+        shot("14c-sante-envois-echoues")
+        page.once("dialog", lambda d: d.accept())
+        page.click("[data-action=outbox-close]")
+        page.wait_for_selector("text=L’historique est conservé", timeout=15000)
+        assert page.locator("[data-action=outbox-close]").count() == 0, "plus rien à clôturer"
+        shot("14d-sante-clotures")
+        page.goto(f"{ORIGIN}/#/historique")
+        page.wait_for_selector("text=Envois échoués clôturés")
 
         page.goto(f"{ORIGIN}/#/")
         page.wait_for_selector("#drop-title")

@@ -1,5 +1,29 @@
 # Journal des modifications
 
+## 2026-11-27 (soir) — Claude : correctif urgent des notifications push (essai réel sur Cloudflare TEST)
+
+Demandé par le fondateur à 22 h 39 : 28 messages non distribués et deux alertes Discord toutes les 31 minutes. Détail : `docs/NOTIFICATIONS-PUSH.md`.
+
+- **Boucle reproduite puis supprimée.** Sur `9748ccc`, un message abandonné déclenchait une alerte renvoyée par le même canal, abandonnée 31 minutes plus tard, et ainsi de suite : 30 alertes en 8 h simulées. Désormais :
+  - une panne de canal ouvre un incident (table `channel_health`) avec une alerte, puis au plus un rappel par jour ;
+  - l'alerte ne part jamais par le canal en panne ;
+  - une alerte qui échoue n'en crée aucune autre, y compris si Discord et l'iPhone tombent ensemble ;
+  - les alertes de l'ancienne boucle en file meurent en silence ;
+  - premier envoi accepté : canal rétabli, alerte résolue.
+- **Réessais :** refus à corriger (clé VAPID, en-tête, webhook Discord supprimé) abandonné sans réessais ; pannes passagères réessayées (Retry-After respecté).
+- **Aucun appareil abonné :** rien n'est mis en file pour l'iPhone, sans échec ni alerte. Un abonnement expiré (404, 410) ou créé avec une autre clé (VapidPkHashMismatch) n'est plus supprimé en silence : il est marqué, n'est plus utilisé, et une seule notice part par Discord.
+- **Diagnostic sans secret ni donnée personnelle :**
+  - codes courts (`apple_403_BadJwtToken`…) avec explication en français ;
+  - appareils sous empreinte, contrôle de la paire de clés VAPID dans le Worker ;
+  - état des canaux et envois échoués groupés dans Santé du site ;
+  - commande `node scripts/test-env.mjs diagnostic`, en lecture seule.
+- **Exigences d'Apple :** jeton VAPID gardé 6 h et valable 12 h (Apple demande au plus un renouvellement par heure) ; abonnement à une ancienne clé remplacé par STUDIO.
+- **STUDIO :** essai de notification depuis l'iPhone (réponse d'Apple expliquée, 6 essais par 10 min, journalisé) ; clôture des envois échoués sous Face ID (Discord et iPhone seulement, jamais un e-mail client, historique conservé, journalisée).
+- **Migration `0009_notifications_fiables.sql`**, seulement additive : une table, six colonnes, rien d'effacé ni de modifié.
+- **Assistant TEST :** point de restauration de la base (Time Travel) noté avant les migrations ; mise à jour sans régénérer ni renvoyer les secrets.
+- **Tests :** N01 à N10 ajoutés (`tests/backend/notifications-push.test.mjs`) ; T04 complété ; t20, U06 et U07 adaptés au nouveau comportement ; recette navigateur étendue (clés contrôlées dans workerd, clôture sous Face ID).
+- **Non testé :** Apple et Discord réels (simulés dans les tests), mise à jour sur le compte Cloudflare du fondateur, essai sur son iPhone.
+
 ## 2026-11-27 — Claude : stabilisation finale avant Cloudflare TEST (livraison v1.4 de Work)
 
 Demandée par le fondateur le 27 novembre. Détail : `docs/AUDIT-V2-CLAUDE.md`, section 13.

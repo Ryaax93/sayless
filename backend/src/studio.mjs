@@ -9,10 +9,10 @@ import { stripeMode, stripeReady } from './stripe.mjs';
 import { currentTerms, publishTerms, termsDocument } from './terms.mjs';
 import { exportRecettes, csvSafe, inspectReturn, viewContact } from './operations.mjs';
 import { legacyReviewText, recordLegacyLinkSale } from './payments.mjs';
-import { configuredChannels, deliverOutbox, discordRouting, emailLabel, reconcileEmail } from './notify.mjs';
+import { channelRecovered, configuredChannels, deliverOutbox, discordRouting, emailLabel, parisClock, reconcileEmail } from './notify.mjs';
 import { emailReady } from './email.mjs';
 import { intentStatement, pendingIntents, processMailIntents } from './intents.mjs';
-import { pushReady, validSubscription } from './push.mjs';
+import { explainCode, fingerprint, pushReady, sendToDevices, validSubscription, vapidSelfCheck } from './push.mjs';
 import { listBackups } from './backup.mjs';
 import { COST, fits } from './budget.mjs';
 
@@ -216,16 +216,58 @@ async function readJsonBody(request, size) {
 }
 
 // Salons Discord : destinations effectives, jamais les adresses des webhooks.
-function discordCheck(ctx) {
+function discordCheck(ctx, health = null) {
   const routes = discordRouting(ctx);
   const names = { commandes: 'commandes', expeditions: 'expéditions', retours: 'retours', stock: 'stock', finances: 'finances', rapport: 'rapport quotidien',
     alertes: 'alertes', securite: 'sécurité', site: 'état du site', sauvegardes: 'sauvegardes' };
   const of = (target) => routes.filter((r) => r.target === target).map((r) => names[r.route]);
   const [own, shared, none] = [of('dedicated'), of('shared'), of('none')];
   if (!own.length && !shared.length) return { name: 'Notifications Discord', state: 'todo', detail: 'Webhooks des salons privés à saisir' };
-  return { name: 'Notifications Discord', state: 'ok', detail: [own.length ? `Salons dédiés : ${own.join(', ')}` : null,
+  return { name: 'Notifications Discord', state: health?.state === 'failing' ? 'alert' : 'ok', detail: [failingText(health),
+    own.length ? `Salons dédiés : ${own.join(', ')}` : null,
     shared.length ? `${own.length ? 'Autres salons' : 'Tous les salons'} par le webhook unique` : null,
     none.length ? `Sans destination Discord : ${none.join(', ')}` : null].filter(Boolean).join(' ; ') };
+}
+
+// ---------- notifications : état des canaux, iPhone, file d'envoi ----------
+const when = (t) => {
+  const c = parisClock(t);
+  return `${c.date.slice(8, 10)}/${c.date.slice(5, 7)} à ${String(c.hour).padStart(2, '0')} h ${String(c.minute).padStart(2, '0')}`;
+};
+function failingText(health) {
+  if (health?.state !== 'failing') return null;
+  return `En échec depuis le ${when(health.since)} (${health.failures} message(s) non remis) : ${explainCode(health.last_error)}`;
+}
+async function channelStates(db) {
+  const rows = await all(db, 'SELECT channel, state, since, failures, last_error, alerted_at, last_ok_at FROM channel_health');
+  return Object.fromEntries(rows.map((r) => [r.channel, r]));
+}
+// Appareils abonnés, sans adresse ni clé : nom, empreinte, dates, dernier résultat expliqué.
+async function pushDevices(db) {
+  const rows = await all(db, `SELECT endpoint, label, created_at, last_ok_at, last_attempt_at, last_status, last_error, expired_at, failures
+    FROM push_subscriptions ORDER BY created_at DESC LIMIT 10`);
+  return Promise.all(rows.map(async (r) => ({ fp: await fingerprint(r.endpoint), label: r.label ?? 'Appareil', active: r.expired_at === null,
+    created_at: iso(r.created_at), last_ok_at: r.last_ok_at ? iso(r.last_ok_at) : null, last_attempt_at: r.last_attempt_at ? iso(r.last_attempt_at) : null,
+    last_status: r.last_status ?? null, last_error: r.last_error ?? null, explanation: r.last_error ? explainCode(r.last_error) : null,
+    expired_at: r.expired_at ? iso(r.expired_at) : null, failures: r.failures })));
+}
+function pushCheck(ctx, { health, active, expired, self }) {
+  const name = 'Notifications iPhone';
+  if (!pushReady(ctx)) return { name, state: 'todo', detail: 'Clés VAPID à saisir' };
+  if (!self.keypair) return { name, state: 'alert', detail: 'Clé privée et clé publique VAPID incohérentes : Apple refusera chaque envoi (BadJwtToken)' };
+  if (!self.subject) return { name, state: 'alert', detail: 'Sujet VAPID invalide : une adresse https: ou mailto: sans espace' };
+  const failing = failingText(health);
+  if (failing) return { name, state: 'alert', detail: `${failing}. Essai : cloche de l’écran Aujourd’hui, « Envoyer un essai »` };
+  if (!active) return { name, state: 'wait', detail: `Aucun iPhone abonné${expired ? ` (${expired} abonnement(s) expiré(s))` : ''} : ouvre STUDIO depuis l’icône de l’iPhone, cloche, « Activer »` };
+  return { name, state: 'ok', detail: `${active} appareil(s) abonné(s)${health?.last_ok_at ? `, dernier envoi accepté le ${when(health.last_ok_at)}` : ', aucun envoi encore accepté'}` };
+}
+// Envois échoués non clôturés, groupés par canal et code (aucun contenu, aucune adresse).
+async function outboxFailures(db) {
+  const groups = await all(db, `SELECT channel, COALESCE(last_error, 'inconnu') AS code, COUNT(*) AS n FROM outbox
+    WHERE status = 'dead' AND closed_at IS NULL GROUP BY channel, code ORDER BY n DESC LIMIT 5`);
+  const closable = (await one(db, `SELECT COUNT(*) AS n FROM outbox WHERE channel IN ('discord', 'push') AND closed_at IS NULL
+    AND (status = 'dead' OR (status IN ('pending', 'sending') AND (dedupe LIKE '%:technical:outbox:%' OR dedupe LIKE '%:channel_failure:%')))`)).n;
+  return { closable, groups: groups.map((g) => ({ channel: g.channel, code: g.code, n: g.n, explanation: explainCode(g.code) })) };
 }
 
 export async function handleStudio(request, ctx, { route, url, session, settings, requireStepUp, deps, now, config }) {
@@ -372,11 +414,13 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       const before = Number(url.searchParams.get('before') ?? 0) || Number.MAX_SAFE_INTEGER;
       const rows = await all(ctx.db, 'SELECT id, kind, ref, level, title, body, at, read_at, resolved_at FROM notifications WHERE id < ? ORDER BY id DESC LIMIT 50', before);
       const unread = (await one(ctx.db, 'SELECT COUNT(*) AS n FROM notifications WHERE read_at IS NULL')).n;
-      const devices = (await one(ctx.db, 'SELECT COUNT(*) AS n FROM push_subscriptions')).n;
+      const list = await pushDevices(ctx.db);
+      const health = (await channelStates(ctx.db)).push ?? null;
       const channels = configuredChannels(ctx);
       return json({ notifications: rows.map((n) => ({ ...n, at: iso(n.at), read: Boolean(n.read_at), resolved: Boolean(n.resolved_at),
         order_id: /^[0-9a-f-]{36}$/.test(n.ref) ? n.ref : null })), unread, next: rows.length === 50 ? rows.at(-1).id : null,
-      channels: { discord: channels.includes('discord'), push: { configured: pushReady(ctx), devices, public_key: pushReady(ctx) ? ctx.VAPID_PUBLIC_KEY : null },
+      channels: { discord: channels.includes('discord'), push: { configured: pushReady(ctx), devices: list.filter((d) => d.active).length,
+        device_list: list, failing: health?.state === 'failing' ? failingText(health) : null, public_key: pushReady(ctx) ? ctx.VAPID_PUBLIC_KEY : null },
         email: emailReady(ctx) }, report_hour: 10 });
     }
     case 'POST /api/admin/notifications/read': {
@@ -399,11 +443,15 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       if (!pushReady(ctx)) throw fail('not_configured');
       const sub = validSubscription(body);
       if (!sub) throw fail('invalid_request');
+      // Abonnement créé avec une autre clé VAPID (installation précédente) : Apple refuserait chaque
+      // envoi (VapidPkHashMismatch). STUDIO le remplace alors par un abonnement à la clé actuelle.
+      if (typeof body.key === 'string' && body.key.replace(/=+$/, '') !== String(ctx.VAPID_PUBLIC_KEY).replace(/=+$/, '')) throw fail('push_key_mismatch');
       const labelText = typeof body.label === 'string' ? body.label.slice(0, 40) : 'iPhone';
       await batch(ctx.db, [sql(ctx.db, `INSERT INTO push_subscriptions (endpoint, p256dh, auth, label, created_at) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, failures = 0`, sub.endpoint, sub.p256dh, sub.auth, labelText, now),
+        ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, failures = 0,
+          expired_at = NULL, last_error = NULL`, sub.endpoint, sub.p256dh, sub.auth, labelText, now),
       audit(ctx.db, now, 'fondateur', 'push_subscribed', labelText, 'ok')]);
-      return json({ subscribed: true });
+      return json({ subscribed: true, fp: await fingerprint(sub.endpoint) });
     }
     case 'POST /api/admin/push/unsubscribe': {
       const body = await readJsonBody(request);
@@ -411,12 +459,38 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       await batch(ctx.db, [sql(ctx.db, 'DELETE FROM push_subscriptions WHERE endpoint = ?', body.endpoint)]);
       return json({ subscribed: false });
     }
+    // Essai manuel depuis STUDIO : envoi direct (hors file : ni réessai ni alerte) vers cet iPhone, ou
+    // vers tous les appareils actifs. Réponse du service de notification expliquée, contrôle des clés.
+    // Rien de secret ni de personnel dans la réponse ou le journal : empreintes et codes seulement.
+    case 'POST /api/admin/push/test': {
+      if (!pushReady(ctx)) throw fail('not_configured');
+      const body = await readJsonBody(request);
+      await deps.rateLimit('studio-push-test', 6, 600);
+      const endpoint = typeof body.endpoint === 'string' && body.endpoint.length <= 1024 ? body.endpoint : null;
+      const self = await vapidSelfCheck(ctx);
+      const transport = deps.transport ?? fetch;
+      const results = self.keypair ? await sendToDevices(ctx, (...a) => transport(...a), { kind: 'push_test', level: 'info',
+        title: 'Essai SAYLESS STUDIO', body: 'Si tu lis ceci, les notifications de cet iPhone fonctionnent.' }, now, { endpoint }) : [];
+      const devices = await Promise.all(results.map(async (r) => ({ label: r.label ?? 'Appareil', fp: await fingerprint(r.endpoint), service: r.service,
+        status: r.status || null, reason: r.reason, result: r.result,
+        explanation: r.result === 'ok' ? 'Accepté par le service de notification : la notification doit apparaître dans quelques secondes.' : explainCode(r.code) })));
+      const summary = results.map((r) => r.code ?? 'ok').join(',').slice(0, 120) || (self.keypair ? 'aucun_appareil' : 'vapid_cle_invalide');
+      await batch(ctx.db, [...(results.some((r) => r.result === 'ok') ? channelRecovered(ctx.db, 'push', now) : []),
+        audit(ctx.db, now, 'fondateur', 'push_test', `${results.length} appareil(s)`, summary)]);
+      return json({ keys: { subject: self.subject, keypair: self.keypair, key_fp: self.key_fp }, devices,
+        this_device: endpoint ? (results.length ? 'known' : 'unknown') : null });
+    }
 
     // ---- santé et historique ----
     case 'GET /api/admin/health': {
       const ready = await readiness(ctx, deps);
       const lastEvent = (await one(ctx.db, 'SELECT MAX(at) AS t FROM processed_events')).t;
-      const dead = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead'`)).n;
+      const dead = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead' AND closed_at IS NULL`)).n;
+      const states = await channelStates(ctx.db);
+      const failures = await outboxFailures(ctx.db);
+      const pushRows = await one(ctx.db, `SELECT COALESCE(SUM(CASE WHEN expired_at IS NULL THEN 1 ELSE 0 END), 0) AS active,
+        COALESCE(SUM(CASE WHEN expired_at IS NULL THEN 0 ELSE 1 END), 0) AS expired FROM push_subscriptions`);
+      const self = await vapidSelfCheck(ctx);
       const queued = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status IN ('pending', 'sending')`)).n;
       // E-mails à rapprocher (V14-R1) : référence de commande ou de demande seulement, aucune adresse.
       const uncertain = (await all(ctx.db, `SELECT o.id, o.dedupe, o.first_attempt_at, o.last_attempt_at, o.attempts, o.provider_ref, o.last_error,
@@ -434,16 +508,17 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         { name: 'Base de données', state: problems.length ? 'alert' : 'ok', detail: problems.length ? `${problems.length} écart(s) de stock : ${problems[0]}` : 'Joignable ; stock égal au registre' },
         { name: 'Tâches automatiques', state: cron && now - cron < 300 ? 'ok' : 'alert', detail: cron ? `Dernier passage il y a ${Math.round((now - cron) / 60)} min` : 'Aucun passage enregistré' },
         { name: 'Paiement Stripe', state: stripeReady(ctx) ? 'ok' : 'todo', detail: stripeReady(ctx) ? `Mode ${stripeMode(ctx) === 'live' ? 'réel' : 'test'}${lastEvent ? `, dernier événement ${iso(lastEvent).slice(0, 16).replace('T', ' ')} UTC` : ', aucun événement reçu'}` : 'Clés à saisir' },
-        discordCheck(ctx),
-        { name: 'Notifications iPhone', state: pushReady(ctx) ? 'ok' : 'todo', detail: pushReady(ctx) ? 'Clés configurées' : 'Clés VAPID à saisir' },
+        discordCheck(ctx, states.discord),
+        pushCheck(ctx, { health: states.push, active: pushRows.active, expired: pushRows.expired, self }),
         { name: 'E-mails clients', state: emailReady(ctx) ? 'ok' : 'todo', detail: emailReady(ctx) ? `Expéditeur ${ctx.EMAIL_FROM}` : 'Resend et domaine vérifié à configurer' },
-        { name: 'File d’envoi', state: dead || stuck || uncertain.length ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente`,
+        { name: 'File d’envoi', state: dead || stuck || uncertain.length ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)`
+          + (failures.groups.length ? ` (${failures.groups.map((g) => `${g.channel} : ${g.code} × ${g.n}`).join(', ')})` : '') : `${queued} message(s) en attente`,
           ...(uncertain.length ? [`${uncertain.length} e-mail(s) client à vérifier dans Resend (voir plus bas)`] : []),
           ...(stuck ? [`${stuck} e-mail(s) client à mettre en file (nouvel essai automatique)`] : [])].join(' ; ') },
         backupCheck({ error: settings.backup_last_error, verified, now, configured: Boolean(ctx.BACKUPS && ctx.BACKUP_PUBLIC_KEY), kept: backups?.length ?? null }),
         { name: 'Conservation des données', state: settings.retention_enabled === '1' ? 'ok' : 'wait', detail: settings.retention_enabled === '1' ? 'Purge automatique active' : 'Purge coupée, en attente de ta validation des durées' },
       ];
-      return json({ checks, readiness: ready, uncertain, environment: ctx.ENVIRONMENT ?? 'local', origins: { shop: ctx.PUBLIC_ORIGIN ?? null, studio: config.origin } });
+      return json({ checks, readiness: ready, uncertain, outbox: failures, environment: ctx.ENVIRONMENT ?? 'local', origins: { shop: ctx.PUBLIC_ORIGIN ?? null, studio: config.origin } });
     }
     // Rapprochement d'un e-mail « à vérifier » : décision du fondateur après contrôle dans Resend.
     // « delivered » clôt la ligne ; « resend » la renvoie (même clé d'idempotence). Face ID requis.
@@ -455,6 +530,28 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'email_reconciled', `outbox:${body.id}`, body.decision)]);
       if (body.decision === 'resend') await deliverOutbox(ctx, deps.senders, deps, { only: (await one(ctx.db, 'SELECT dedupe FROM outbox WHERE id = ?', body.id)).dedupe });
       return json({ ok: true, decision: body.decision });
+    }
+    // Clôture des envois échoués (Discord et iPhone seulement, jamais un e-mail client) : les lignes
+    // restent dans la file comme historique, marquées clôturées ; les alertes de l'ancienne boucle en
+    // attente cessent d'être réessayées, leurs notifications sont résolues (rien n'est effacé).
+    // Face ID requis, opération journalisée.
+    case 'POST /api/admin/outbox/close': {
+      requireStepUp();
+      const body = await readJsonBody(request);
+      if (body.scope !== 'failed') throw fail('invalid_request');
+      const done = await batch(ctx.db, [
+        sql(ctx.db, `UPDATE outbox SET closed_at = ?, close_reason = 'cloture_fondateur'
+          WHERE status = 'dead' AND closed_at IS NULL AND channel IN ('discord', 'push')`, now),
+        sql(ctx.db, `UPDATE outbox SET status = 'dead', closed_at = ?, close_reason = 'cloture_fondateur'
+          WHERE status IN ('pending', 'sending') AND closed_at IS NULL AND channel IN ('discord', 'push')
+          AND (dedupe LIKE '%:technical:outbox:%' OR dedupe LIKE '%:channel_failure:%')`, now),
+        sql(ctx.db, `UPDATE notifications SET resolved_at = COALESCE(resolved_at, ?), read_at = COALESCE(read_at, ?)
+          WHERE kind = 'technical' AND ref LIKE 'outbox:%' AND resolved_at IS NULL`, now, now),
+      ]);
+      const [failed, pending, alerts] = done.map((r) => r.meta.changes);
+      await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'outbox_closed', `${failed + pending} envoi(s)`,
+        `${failed} échoué(s), ${pending} alerte(s) en attente, ${alerts} notification(s) résolue(s)`)]);
+      return json({ closed: failed + pending, failed, pending, alerts });
     }
     // Copies chiffrées : liste, et téléchargement (copie hors ligne hebdomadaire). Illisibles sans
     // la clé privée du fondateur ; le téléchargement est tout de même confirmé par Face ID et noté.

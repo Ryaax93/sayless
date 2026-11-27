@@ -12,7 +12,7 @@ const save = () => writeFileSync(file, JSON.stringify(cloud));
 const out = (text) => process.stdout.write(`${text}\n`);
 const fail = (text) => { process.stderr.write(`✘ [ERROR] ${text}\n`); process.exit(1); };
 const opt = (flag) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : null);
-const VALUED = ['-c', '--location', '--cwd', '--secrets-file'];
+const VALUED = ['-c', '--location', '--cwd', '--secrets-file', '--command'];
 const words = args.filter((x, i) => !x.startsWith('-') && !VALUED.includes(args[i - 1]));
 const ACCOUNT = { name: 'SAYLESS', id: '0123456789abcdef0123456789abcdef' };
 const config = () => readFileSync(opt('-c'), 'utf8');
@@ -42,6 +42,18 @@ if (a === 'whoami') {
   if (process.env.FAKE_MIGRATIONS_FAIL) fail('A request to the Cloudflare API failed (simulé : connexion coupée)');
   if (db.migrated) out('✅ No migrations to apply!');
   else { db.migrated = true; save(); out('Migrations to be applied:\n│ 0001_init.sql │\n✅ Applied 6 migrations'); }
+} else if (a === 'd1' && b === 'time-travel' && c === 'info') {
+  const db = cloud.d1.find((d) => d.name === words[3]);
+  if (!db) fail(`Couldn't find a D1 DB with the name or binding '${words[3]}'`);
+  out(JSON.stringify({ bookmark: `00000085-0000024c-00004c6d-${'8e61117bf38d7adb71b934ebbf891683'}` }));
+} else if (a === 'd1' && b === 'execute') {
+  // Base distante simulée : réponses figées d'une base en pleine boucle (avant la migration 0009).
+  const command = opt('--command');
+  appendFileSync(join(dir, 'sql.log'), `${command.replace(/\s+/g, ' ').trim()}\n`);
+  const results = /FROM outbox/.test(command) ? [{ channel: 'push', status: 'dead', code: 'aucune notification remise', n: 28, premier: 1795000000, dernier: 1795026000 }]
+    : /FROM push_subscriptions/.test(command) ? [{ n: 1, echecs: 30, premier: 1795001800, dernier: 1795001800, succes: null }]
+      : /FROM notifications/.test(command) ? [{ kind: 'technical', n: 28, premier: 1795001860 }] : [];
+  out(JSON.stringify([{ results, success: true, meta: { changes: 0 } }]));
 } else if (a === 'secret' && b === 'list') {
   const w = cloud.workers[var_(config(), 'name')];
   if (!w) fail('This Worker does not exist on your account. [code: 10007]');

@@ -34,16 +34,16 @@ export function createContext(env, overrides = {}) {
   deps.rateLimit = overrides.rateLimit ?? ((key, limit, windowSeconds) => rateLimit(ctx.db, key, limit, windowSeconds, deps.now()));
   deps.turnstile = overrides.turnstile ?? ((token, ip) => verifyTurnstile(env, token, ip));
   deps.reconcile = (session) => reconcileSession(ctx, session, deps);
-  deps.senders = overrides.senders ?? sendersFor(env, transport);
+  deps.senders = overrides.senders ?? sendersFor(env, transport, deps.now);
   deps.sendNow = overrides.sendNow ?? ((dedupe) => deliverOutbox(ctx, deps.senders, deps, { only: dedupe }));
   return { ctx, deps };
 }
 
 // Canaux d'envoi réellement configurés (secrets saisis dans Cloudflare) ; aucun autre.
-export function sendersFor(env, transport = fetch) {
+export function sendersFor(env, transport = fetch, clock = undefined) {
   const senders = {};
   if (configuredChannels(env).includes('discord')) senders.discord = discordSender(env, transport);
-  if (configuredChannels(env).includes('push')) senders.push = pushSender(env, transport);
+  if (configuredChannels(env).includes('push')) senders.push = pushSender(env, transport, clock);
   if (emailReady(env)) senders.email = resendSender(env, transport);
   return senders;
 }

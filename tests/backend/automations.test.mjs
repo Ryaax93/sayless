@@ -119,6 +119,13 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
     const third = await run([], { FAKE_SUBDOMAIN: 'sayless-essai' });
     assert.equal(third.code, 0, third.text);
     assert.match(third.text, /déjà à jour/);
+    // Mise à jour d'un environnement installé : point de restauration noté avant les migrations,
+    // mêmes base, espace et secrets (rien régénéré ni renvoyé), code d'installation inchangé.
+    assert.match(third.text, /Point de restauration de la base : 00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683/);
+    assert.match(third.text, /d1 time-travel restore sayless-test --bookmark=/);
+    const updated = JSON.parse(readFileSync(join(cloudDir, 'cloud.json'), 'utf8')).workers['sayless-ops-test'];
+    assert.deepEqual(updated.secrets, worker.secrets, 'secrets du Worker inchangés par la mise à jour');
+    assert.equal(JSON.parse(readFileSync(join(local, 'test-env.local.json'), 'utf8')).restore_point.bookmark.length, 59);
     const log = calls();
     assert.equal(log.filter((c) => c.args[0] === 'd1' && c.args[1] === 'create').length, 1, 'base créée une seule fois');
     assert.equal(log.filter((c) => c.args[0] === 'kv' && c.args[2] === 'create').length, 1, 'espace créé une seule fois');
@@ -129,6 +136,15 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
     assert.equal(deploys.length, 4, 'refusé, envoi avec secrets, envoi avec l’adresse de STUDIO, mise à jour');
     assert.ok(log.filter((c) => c.args[0] !== 'whoami').every((c) => c.account === '0123456789abcdef0123456789abcdef'), 'compte toujours désigné');
 
+    // Diagnostic des notifications : lecture seule (SELECT uniquement), codes et nombres seulement.
+    const diag = await run(['diagnostic']);
+    assert.equal(diag.code, 0, diag.text);
+    assert.match(diag.text, /lecture seule/);
+    assert.match(diag.text, /push · dead · aucune notification remise : 28/);
+    assert.match(diag.text, /Appareils iPhone enregistrés : 1 /);
+    const statements = readFileSync(join(cloudDir, 'sql.log'), 'utf8').trim().split('\n').filter(Boolean);
+    assert.ok(statements.length >= 4 && statements.every((q) => /^SELECT /.test(q.trim())), 'aucune écriture');
+    assert.ok(statements.every((q) => !/endpoint|p256dh|auth|payload|body/.test(q)), 'ni adresse, ni clé, ni contenu lu');
     const state = await run(['etat']);
     assert.equal(state.code, 0, state.text);
     assert.match(state.text, /Base : ok ; tâche planifiée : never ; paiement Stripe : test/, 'lu sur le vrai code du Worker (Stripe simulé du banc)');

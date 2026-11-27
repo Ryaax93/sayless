@@ -214,7 +214,18 @@ Cause : Miniflare 4 ouvre une connexion TCP locale par requête SQL ; Windows (1
 | Face ID | SimpleWebAuthn 14.1.0 vérifie en plus de SAYLESS, désactivée jusqu'à la validation du fondateur. | 25 tests rejoués avec la bibliothèque, W01, recette navigateur, contre-épreuve |
 | CI | Régressions v1.4 et V14-R1 obligatoires, Face ID avec bibliothèque, builds boutique, limites gratuites, audits bloquants. | Linux et Windows |
 
-## 14. Risques et limites restants
+## 14. Correctif des notifications push (27 novembre 2026, soir)
+
+| Point | Correction | Tests |
+| --- | --- | --- |
+| Boucle d'alertes (essai réel : deux alertes toutes les 31 min) | Incident par canal, une alerte puis un rappel par jour au plus, jamais par le canal en panne, aucune alerte sur une alerte | N01, N02, N08, N10 |
+| Absence d'appareil | Rien en file pour l'iPhone ; abonnement expiré gardé et marqué, une seule notice | N03, U07 |
+| Diagnostic | Codes et raisons d'Apple sans adresse ni clé, contrôle des clés VAPID, commande `diagnostic` en lecture seule | N04, N06, T04 |
+| Essai et clôture dans STUDIO | Essai depuis l'iPhone ; clôture sous Face ID, historique conservé, e-mails clients exclus | N06, N07, recette navigateur |
+| Exigences d'Apple | Jeton VAPID gardé 6 h et valable 12 h ; abonnement à une ancienne clé remplacé | N05 |
+| Mise à jour de TEST | Migration additive `0009`, point de restauration, secrets ni régénérés ni renvoyés | T04, N08 |
+
+## 15. Risques et limites restants
 
 - Rien n’a été essayé sur Cloudflare réel, Stripe en mode test réel, Resend réel, un vrai iPhone (Safari, VoiceOver, notifications), ni avec un transporteur : procédure prête dans `docs/CLOUDFLARE-TEST.md`, à lancer avec l’accord du fondateur.
 - Offre gratuite : requêtes D1 et appels externes désormais comptés et bornés (section 12) ; les 10 ms de calcul par invocation ne se mesurent pas en local : à relever dans les métriques du Worker de test. La sauvegarde a sa propre minute.

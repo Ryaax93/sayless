@@ -2,7 +2,7 @@
 // Les messages ne contiennent jamais de nom, d'e-mail, de téléphone ni d'adresse : seuls des
 // champs de la liste blanche (numéro, référence, taille, montant, mode de livraison) sont lus.
 import { all, batch, getSettings, one, pad4, sql } from './lib.mjs';
-import { pushReady } from './push.mjs';
+import { explainCode, pushReady } from './push.mjs';
 import { COST, fits } from './budget.mjs';
 import { emailEnvelope } from './email.mjs';
 
@@ -24,7 +24,7 @@ export const DISCORD_ROUTES = Object.freeze({
   stock: ['low_stock', 'size_sold_out', 'drop_sold_out', 'paid_without_stock', 'legacy_link_without_stock'],
   finances: ['payment_mismatch', 'payment_failed', 'dispute', 'unknown_refund', 'unknown_session'],
   rapport: ['daily_report'],
-  alertes: ['technical', 'mail_intent_stuck', 'email_uncertain', 'contact_not_sealed', 'terms_integrity'],
+  alertes: ['technical', 'channel_failure', 'push_device_expired', 'mail_intent_stuck', 'email_uncertain', 'contact_not_sealed', 'terms_integrity'],
   securite: ['studio_passkey_added', 'studio_recovery_used', 'studio_counter_regressed', 'studio_codes_regenerated'],
   site: ['shop_opened', 'shop_paused'],
   sauvegardes: ['backup_failed', 'backup_not_configured'],
@@ -45,8 +45,11 @@ export const discordConfigured = (env) => validWebhook(env.DISCORD_WEBHOOK_URL)
 export const discordRouting = (env) => Object.keys(DISCORD_ROUTES).map((route) => ({ route,
   target: validWebhook(env[discordSecretName(route)]) ? 'dedicated' : validWebhook(env.DISCORD_WEBHOOK_URL) ? 'shared' : 'none' }));
 
+// `exclude` : canaux à ne pas utiliser (une alerte sur une panne de canal ne repart jamais par ce canal).
+// iPhone : un message n'est mis en file que si un appareil est abonné ; sans appareil, la notification
+// reste dans STUDIO et rien n'échoue (l'absence d'appareil n'est pas une panne).
 export function createNotifier(env, deps) {
-  return async function notify({ kind, ref, level = 'info', title, body }) {
+  return async function notify({ kind, ref, level = 'info', title, body, exclude = [] }) {
     const { db } = env;
     const now = deps.now();
     const statements = [sql(db, `INSERT INTO notifications (kind, ref, level, title, body, at) VALUES (?, ?, ?, ?, ?, ?)
@@ -56,10 +59,14 @@ export function createNotifier(env, deps) {
       .split(',').filter((c) => ['discord', 'push'].includes(c));
     const route = discordRoute(kind);
     for (const channel of new Set([...(deps.channels ?? []), ...declared])) {
+      if (exclude.includes(channel)) continue;
       // Discord configuré, mais ni salon dédié ni webhook unique pour cet événement : rien à envoyer.
       if (channel === 'discord' && discordConfigured(env) && !discordUrl(env, route)) continue;
-      statements.push(sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now, channel === 'discord' ? route : null));
+      statements.push(channel === 'push'
+        ? sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) SELECT 'push', ?, ?, ?, NULL
+            WHERE EXISTS (SELECT 1 FROM push_subscriptions WHERE expired_at IS NULL) ON CONFLICT (dedupe) DO NOTHING`, `push:${kind}:${ref}`, payload, now)
+        : sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now, channel === 'discord' ? route : null));
     }
     await batch(db, statements);
   };
@@ -126,6 +133,75 @@ export const EMAIL_MAX_ATTEMPTS = 25;
 
 const outboxRef = (row) => row.dedupe.replace(/^email:/, '');
 
+// Pannes de canal (Discord, iPhone, e-mail client) : un incident par canal (table channel_health).
+// Alerte au premier message abandonné, puis au plus une par jour tant que la panne dure, jamais par
+// le canal en panne. Une alerte sur une panne (ou une notice d'abonnement expiré) qui échoue à son
+// tour n'en déclenche aucune autre : aucune boucle, même si Discord et l'iPhone tombent ensemble.
+// Les alertes de l'ancienne file (« technical » sur outbox:N, avant la migration 0009) comptent
+// comme telles. Premier envoi réussi : canal rétabli, alerte ouverte résolue.
+export const ALERT_REPEAT = 24 * 3600;
+const META_KINDS = new Set(['channel_failure', 'push_device_expired']);
+export function isMetaAlert(row) {
+  if (/:technical:outbox:\d+$/.test(row.dedupe)) return true;
+  try {
+    return META_KINDS.has(JSON.parse(row.payload)?.kind);
+  } catch {
+    return false; // e-mail chiffré : jamais une alerte
+  }
+}
+const CHANNEL_TITLES = { push: 'Notifications iPhone', discord: 'Notifications Discord', email: 'E-mails clients' };
+const CHANNEL_HINTS = { email: 'Vérifie Resend (clé et domaine). Détail : Santé du site et historique.' };
+
+// Code d'erreur court, sans adresse ni secret (un webhook Discord porte un jeton dans son adresse).
+export function errorCode(error) {
+  const own = typeof error?.code === 'string' && /^[A-Za-z0-9_:.-]{1,60}$/.test(error.code) ? error.code : null;
+  return (own ?? String(error?.message ?? 'erreur')).replace(/https?:\/\/\S+/g, 'adresse').replace(/[^A-Za-z0-9 _:.'’-]/g, '').slice(0, 60) || 'erreur';
+}
+
+const channelFailing = (db, channel, code, now) => sql(db, `INSERT INTO channel_health (channel, state, since, failures, last_error)
+  VALUES (?, 'failing', ?, 1, ?) ON CONFLICT (channel) DO UPDATE SET
+    failures = CASE WHEN channel_health.state = 'failing' THEN channel_health.failures + 1 ELSE 1 END,
+    since = CASE WHEN channel_health.state = 'failing' THEN channel_health.since ELSE excluded.since END,
+    alerted_at = CASE WHEN channel_health.state = 'failing' THEN channel_health.alerted_at ELSE NULL END,
+    state = 'failing', last_error = excluded.last_error
+  RETURNING since, alerted_at, failures`, channel, now, code);
+const channelOk = (db, channel, now) => sql(db, `INSERT INTO channel_health (channel, state, since, last_ok_at) VALUES (?, 'ok', ?, ?)
+  ON CONFLICT (channel) DO UPDATE SET
+    since = CASE WHEN channel_health.state = 'failing' THEN excluded.since ELSE channel_health.since END,
+    failures = CASE WHEN channel_health.state = 'failing' THEN 0 ELSE channel_health.failures END,
+    state = 'ok', last_ok_at = excluded.last_ok_at`, channel, now, now);
+const resolveChannelAlerts = (db, channel, now) => sql(db, `UPDATE notifications SET resolved_at = ?
+  WHERE kind = 'channel_failure' AND ref >= ? AND ref < ? AND resolved_at IS NULL`, now, `${channel}:`, `${channel};`);
+// Envoi réussi par un canal (file ou essai depuis STUDIO) : canal rétabli, alerte ouverte résolue.
+export const channelRecovered = (db, channel, now) => [channelOk(db, channel, now), resolveChannelAlerts(db, channel, now)];
+
+function parisWhen(t) {
+  const c = parisClock(t);
+  return `${c.date.slice(8, 10)}/${c.date.slice(5, 7)} à ${String(c.hour).padStart(2, '0')} h ${String(c.minute).padStart(2, '0')}`;
+}
+
+async function alertChannel(db, deps, channel, health, code, now) {
+  if (!health || (health.alerted_at !== null && health.alerted_at > now - ALERT_REPEAT)) return;
+  const claimed = await batch(db, [sql(db, `UPDATE channel_health SET alerted_at = ? WHERE channel = ? AND state = 'failing'
+    AND (alerted_at IS NULL OR alerted_at <= ?)`, now, channel, now - ALERT_REPEAT)]);
+  if (!claimed[0].meta.changes) return;
+  const again = health.alerted_at !== null;
+  await deps.notify({ kind: 'channel_failure', ref: `${channel}:${health.since}${again ? `:${now}` : ''}`, level: 'critical',
+    title: `${CHANNEL_TITLES[channel] ?? channel} ${again ? 'toujours ' : ''}en échec`,
+    body: `${health.failures} message(s) non remis depuis le ${parisWhen(health.since)}. Cause : ${explainCode(code)}. `
+      + (CHANNEL_HINTS[channel] ?? 'Les messages restent dans STUDIO. Diagnostic et essai : Santé du site et historique.'), exclude: [channel] });
+}
+
+// Abonnements iPhone expirés pendant un envoi : une notice (jamais par l'iPhone) pour réactiver.
+async function noticeExpired(deps, receipt) {
+  const expired = receipt?.expired ?? [];
+  if (!expired.length || !deps.notify) return;
+  await deps.notify({ kind: 'push_device_expired', ref: expired.map((d) => d.fp).sort().join('+').slice(0, 100), level: 'warning',
+    title: 'Notifications iPhone à réactiver',
+    body: `${expired.length} abonnement(s) refusé(s) par le service de notification (${explainCode(expired[0].code)}). `
+      + 'Ouvre STUDIO depuis l’icône de l’iPhone, puis la cloche et « Activer ».', exclude: ['push'] });
+}
+
 async function parkUncertain(db, deps, row, since, reason) {
   const parked = await batch(db, [sql(db, `UPDATE outbox SET status = 'uncertain', uncertain_since = ?, last_error = ?
     WHERE id = ? AND status = ? AND attempts = ?`, since, reason, row.id, row.status, row.attempts)]);
@@ -157,7 +233,7 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
       const push = row.channel === 'push';
       if (push && devices === null) {
         if (!fits(deps, { queries: 1 })) break;
-        devices = (await one(db, 'SELECT COUNT(*) AS n FROM push_subscriptions'))?.n ?? 0;
+        devices = (await one(db, 'SELECT COUNT(*) AS n FROM push_subscriptions WHERE expired_at IS NULL'))?.n ?? 0;
       }
       // Push : lecture des abonnements, puis une requête et un appel par appareil.
       if (!fits(deps, push ? { queries: COST.outboxMessage.queries + 1 + devices * COST.pushDevice.queries, external: devices * COST.pushDevice.external }
@@ -183,25 +259,34 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
       const receipt = await send(email ? row.payload : JSON.parse(row.payload),
         { ...row, attempts, envelope: email ? JSON.parse(envelope) : null });
       await batch(db, [sql(db, `UPDATE outbox SET status = 'sent', provider_ref = ?, last_error = NULL WHERE id = ?`,
-        typeof receipt?.id === 'string' ? receipt.id : null, row.id)]);
+        typeof receipt?.id === 'string' ? receipt.id : null, row.id), ...channelRecovered(db, row.channel, now)]);
       sent += 1;
+      await noticeExpired(deps, receipt);
     } catch (error) {
       // Échec ambigu d'un e-mail : peut-être parti ; l'incertitude date de cet essai (ou d'avant).
       const uncertain = email && (since !== null || error?.ambiguous === true) ? (since ?? now) : null;
-      const code = String(error?.message ?? 'erreur').slice(0, 40);
+      const code = errorCode(error);
       if (uncertain !== null && attempts >= EMAIL_MAX_ATTEMPTS) {
         await parkUncertain(db, deps, { ...row, status: 'sending', attempts }, uncertain, 'essais_epuises');
         continue;
       }
-      // Échec certain : rien n'est parti. Demande d'attente (429) : ni abandon ni échec compté.
-      const wait = Number.isInteger(error?.retryAfter) ? error.retryAfter : null;
-      const dead = uncertain === null && wait === null && attempts >= maxAttempts;
-      await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ?, uncertain_since = ?, last_error = ?, attempts = attempts - ? WHERE id = ?`,
-        dead ? 'dead' : 'pending', now + (wait ?? Math.min(60 * 2 ** attempts, 3600)), uncertain, code, wait === null ? 0 : 1, row.id)]);
-      if (dead) {
-        await deps.notify({ kind: 'technical', ref: `outbox:${row.id}`, level: 'critical',
-          title: 'Notification non distribuée', body: `Canal ${row.channel} : échec après ${maxAttempts} essais.` });
+      // iPhone sans appareil abonné actif : rien à remettre, ce n'est pas une panne. Ligne close et
+      // gardée dans l'historique, sans alerte ni nouvel essai.
+      if (!email && error?.noDevice === true) {
+        await batch(db, [sql(db, `UPDATE outbox SET status = 'dead', closed_at = ?, close_reason = 'aucun_appareil', last_error = ? WHERE id = ?`,
+          now, error.detail ? errorCode({ code: error.detail }) : code, row.id)]);
+        await noticeExpired(deps, error);
+        continue;
       }
+      // Échec certain : rien n'est parti. Demande d'attente (429) : ni abandon ni échec compté.
+      // Refus à corriger (permanent : clé, en-tête, webhook supprimé) : abandon sans réessais inutiles.
+      const wait = Number.isInteger(error?.retryAfter) ? error.retryAfter : null;
+      const dead = uncertain === null && wait === null && (attempts >= maxAttempts || (!email && error?.permanent === true));
+      const written = await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ?, uncertain_since = ?, last_error = ?, attempts = attempts - ? WHERE id = ?`,
+        dead ? 'dead' : 'pending', now + (wait ?? Math.min(60 * 2 ** attempts, 3600)), uncertain, code, wait === null ? 0 : 1, row.id),
+      ...(dead ? [channelFailing(db, row.channel, code, now)] : [])]);
+      if (dead && !isMetaAlert(row)) await alertChannel(db, deps, row.channel, written[1]?.results?.[0] ?? null, code, now);
+      await noticeExpired(deps, error);
     }
   }
   return sent;
@@ -230,23 +315,32 @@ export async function markRestoredEmails(db, createdAt) {
 // Salon choisi à l'envoi d'après la destination logique enregistrée dans la file (route) : un
 // webhook ajouté ou corrigé entre-temps sert aussi aux messages déjà en attente.
 // 429 : Discord demande d'attendre (Retry-After) ; le message repart ensuite, sans compter comme échec.
+// Webhook absent, refusé ou supprimé (400, 401, 403, 404) : refus à corriger, aucun réessai inutile.
+// Erreur réseau : code « discord_reseau », jamais l'adresse (elle contient le jeton du webhook).
 // Discord n'a pas de clé d'idempotence : une réponse perdue peut, rarement, doubler un message.
+const discordError = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
 export function discordSender(env, transport = fetch) {
   return async (message, row = {}) => {
     const url = discordUrl(env, row.route ?? discordRoute(message.kind));
-    if (!url) throw new Error('salon_discord_absent');
+    if (!url) throw discordError('salon_discord_absent', { permanent: true });
     const colors = { info: 0xf0a6bf, warning: 0xf0c674, critical: 0xd9534f };
-    const response = await transport(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(5000),
-      body: JSON.stringify({ username: 'SAYLESS STUDIO', allowed_mentions: { parse: [] },
-        embeds: [{ title: String(message.title).slice(0, 250), description: String(message.body).slice(0, 2000),
-          color: colors[message.level] ?? colors.info }] }),
-    });
+    let response;
+    try {
+      response = await transport(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(5000),
+        body: JSON.stringify({ username: 'SAYLESS STUDIO', allowed_mentions: { parse: [] },
+          embeds: [{ title: String(message.title).slice(0, 250), description: String(message.body).slice(0, 2000),
+            color: colors[message.level] ?? colors.info }] }),
+      });
+    } catch (error) {
+      if (error?.code === 'budget_exhausted') throw error;
+      throw discordError('discord_reseau');
+    }
     if (response.status === 429) {
       const wait = Number(response.headers.get('Retry-After'));
-      throw Object.assign(new Error('discord_429'), { retryAfter: Number.isFinite(wait) && wait > 0 ? Math.min(Math.ceil(wait), 3600) : 60 });
+      throw discordError('discord_429', { retryAfter: Number.isFinite(wait) && wait > 0 ? Math.min(Math.ceil(wait), 3600) : 60 });
     }
-    if (!response.ok) throw new Error(`discord_${response.status}`);
+    if (!response.ok) throw discordError(`discord_${response.status}`, { permanent: [400, 401, 403, 404].includes(response.status) });
   };
 }
 
@@ -280,7 +374,7 @@ export async function maybeDailyReport(env, deps) {
     WHERE p.status = 'published' ORDER BY v.position`);
   const open = await one(db, `SELECT COUNT(*) AS n FROM notifications WHERE level = 'critical' AND resolved_at IS NULL`);
   const review = await one(db, `SELECT COUNT(*) AS n FROM orders WHERE status IN ('review', 'paid_no_stock')`);
-  const dead = await one(db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead'`);
+  const dead = await one(db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead' AND closed_at IS NULL`);
   const requests = await one(db, `SELECT COUNT(*) AS n FROM customer_requests WHERE status = 'received'`);
   const stockText = stock.map((s) => (s.confirmed_at === null ? `${s.size} à confirmer` : `${s.size} ${s.available}${s.reserved ? ` (+${s.reserved} réservée)` : ''}`)).join(' · ');
   const backup = Number(settings.backup_last_verified_at || 0);
