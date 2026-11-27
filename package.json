@@ -25,10 +25,12 @@
     "test:review:v14": "node --test tests/review/v14-integrity.test.mjs",
     "test:review:risks": "node --test tests/review/v14-open-issues.test.mjs"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@simplewebauthn/server": "14.1.0"
+  },
   "devDependencies": {
-    "wrangler": "4.168.0",
-    "miniflare": "5.20261123.1-beta"
+    "miniflare": "5.20261123.1-beta",
+    "wrangler": "4.168.0"
   },
   "type": "module",
   "overrides": {
