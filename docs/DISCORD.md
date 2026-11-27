@@ -53,13 +53,13 @@ Une adresse qui ne commence pas par `https://discord.com/api/webhooks/` ou `http
 ## 3. Vérifier
 
 1. `node scripts/test-env.mjs etat` doit finir par « Environnement de TEST opérationnel ».
-2. Dans STUDIO, ouvre **Plus** > **Santé du site**. La ligne « Notifications Discord » liste les salons dédiés, ceux qui passent par le webhook unique et ceux sans destination. Aucune adresse n'y figure.
+2. Dans STUDIO, ouvre **Plus** > **Santé du site et historique**. La ligne « Notifications Discord » liste les salons dédiés, ceux qui passent par le webhook unique et ceux sans destination. Aucune adresse n'y figure.
 3. Premier message automatique : le rapport de 10 h arrive dans #rapport-quotidien (ou dans le salon commun). Rien d'autre à faire, et les paiements de TEST restent fermés.
 
 Pour essayer un webhook tout de suite, sans écrire son adresse dans une commande ni l'enregistrer : PowerShell demande l'adresse en masquant la saisie, poste un message d'essai, puis l'oublie.
 
 ```powershell
-$CacheSayless = Read-Host 'Colle l’adresse du webhook (masquée, non enregistrée)' -AsSecureString
+$CacheSayless = Read-Host "Colle l'adresse du webhook (masquée, non enregistrée)" -AsSecureString
 $AdresseSayless = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($CacheSayless))
 $CorpsSayless = [Text.Encoding]::UTF8.GetBytes('{"content":"Essai SAYLESS STUDIO : ce salon est bien relié.","allowed_mentions":{"parse":[]}}')
 Invoke-RestMethod -Method Post -Uri $AdresseSayless -ContentType 'application/json; charset=utf-8' -Body $CorpsSayless

@@ -11,14 +11,14 @@ Comment exécuter les blocs :
 
 ## A. Vérifier sur ton PC (aucun déploiement)
 
-Ce bloc crée un dossier neuf `sayless-test`, sans toucher à ton dossier actuel `sayless`. Durée : environ 15 minutes.
+Ce bloc crée un dossier neuf `sayless-test`, sans toucher à ton dossier actuel `sayless`. Les fichiers gardent les fins de ligne de la vérification GitHub (`core.autocrlf=false`). Durée : environ 15 minutes.
 
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
   Set-Location $env:USERPROFILE
   if (Test-Path '.\sayless-test') { throw 'Le dossier sayless-test existe déjà : renomme-le avant de continuer.' }
-  git clone --branch claude/verification-v2 --single-branch https://github.com/Ryaax93/sayless.git sayless-test
+  git clone -c core.autocrlf=false --branch claude/verification-v2 --single-branch https://github.com/Ryaax93/sayless.git sayless-test
   if ($LASTEXITCODE -ne 0) { throw 'Clonage incomplet' }
   Set-Location '.\sayless-test'
   git rev-parse HEAD
@@ -36,7 +36,7 @@ Ce bloc crée un dossier neuf `sayless-test`, sans toucher à ton dossier actuel
   npm.cmd run check:cloudflare
   if ($LASTEXITCODE -ne 0) { throw 'Compilation Cloudflare en échec' }
   node scripts/check-free-plan.mjs
-  if ($LASTEXITCODE -ne 0) { throw 'Limites de l’offre gratuite dépassées' }
+  if ($LASTEXITCODE -ne 0) { throw "Limites de l'offre gratuite dépassées" }
   Write-Host 'Vérification complète : tout est bon.' -ForegroundColor Green
 }
 ```
@@ -65,7 +65,7 @@ Dans la même fenêtre PowerShell, qui est déjà dans `sayless-test` :
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
-  if (-not (Test-Path '.\scripts\test-env.mjs')) { throw 'Place-toi d’abord dans le dossier sayless-test' }
+  if (-not (Test-Path '.\scripts\test-env.mjs')) { throw "Place-toi d'abord dans le dossier sayless-test" }
   npx.cmd wrangler login
   if ($LASTEXITCODE -ne 0) { throw 'Connexion Cloudflare non terminée' }
   node scripts/test-env.mjs
