@@ -1,0 +1,10 @@
+✔ PUSH-D1 assistant : installation existante, 10 salons et connecteurs, aucune rotation des secrets ni changement de liaison (774.855341ms)
+✔ PUSH-D2 vrai Wrangler --local : 0001–0008 puis 0009, registre des migrations et seconde exécution sans effet (25494.095473ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 26386.153954

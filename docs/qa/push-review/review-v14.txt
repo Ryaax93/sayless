@@ -1,0 +1,19 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review:v14
+> node --test tests/review/v14-integrity.test.mjs
+
+✔ v1.4 B1 : panne de création de l’intention annule la vente entière, puis le webhook réussit une fois (4599.77277ms)
+✔ v1.4 B1 : panne après insertion dans la file, reprise concurrente sans second message (1083.807141ms)
+✔ v1.4 B1 : une demande et son intention sont atomiques même avant toute mise en file (341.417969ms)
+✔ v1.4 B2/C1 : texte exact, version archivée immuable, empreinte erronée refusée sans stock réservé (386.028558ms)
+✔ v1.4 B2 : archive altérée entre devis et paiement ferme les deux accès (472.070971ms)
+✔ v1.4 sauvegarde : intention en attente et archive CGV restaurées puis e-mail repris une seule fois (1196.412357ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8519.835514

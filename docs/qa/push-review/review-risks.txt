@@ -1,0 +1,14 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review:risks
+> node --test tests/review/v14-open-issues.test.mjs
+
+✔ V14-R1 : réponse Resend perdue puis reprise à plus de 24 h, ne pas réexpédier sans rapprochement (4358.505542ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4855.743256

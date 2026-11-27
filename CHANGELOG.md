@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## 2026-11-28 — Work : contre-audit du correctif push be0bb9b
+
+- Relecture indépendante du correctif, des diagnostics réels et des tests Windows. Cascade autonome d'alertes non reproduite après correction, y compris Apple et Discord en panne ensemble ; migration 0009 additive, conservation des données et sauvegarde/restauration vérifiées localement.
+- 230 tests principaux, 13 contrôles commerciaux et 25 tests WebAuthn rejoués : réussis. Audits npm complet/production : 0/0. Compilations boutique, TEST, STUDIO, Worker dry-run et Pages : réussies.
+- Dix contrôles Work complémentaires réussis ; six critères en échec reproduisent cinq anomalies : cache VAPID entre isolates/concurrence, clôture pendant un envoi, réactivation d'un abonnement expiré, santé Discord avec plusieurs salons, diagnostic après essai manuel.
+- NO GO pour redéployer cette version comme correctif complet ; preuves et propositions pour Claude dans `docs/CONTRE-AUDIT-PUSH-WORK.md` et `tests/review/push-*.mjs`. Test D1 renforcé : 300 clients, 130 réponses webhook vérifiées, aucune erreur locale observée.
+- Aucun code backend/STUDIO/dépendance modifié, aucune fusion ni intervention sur Cloudflare, main, v2, le domaine, la boutique publiée ou Stripe réel.
+
 ## 2026-11-27 (soir) — Claude : correctif urgent des notifications push (essai réel sur Cloudflare TEST)
 
 Demandé par le fondateur à 22 h 39 : 28 messages non distribués et deux alertes Discord toutes les 31 minutes. Détail : `docs/NOTIFICATIONS-PUSH.md`.

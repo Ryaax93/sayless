@@ -1,0 +1,3 @@
+OK Worker d’exploitation et STUDIO : 1056 Kio (marge 4 Mio, limite Cloudflare 64 Mio)
+OK Fonctions Pages de la boutique : 126 Kio (marge 4 Mio, limite Cloudflare 64 Mio)
+OK Aucun indicateur nodejs_compat
