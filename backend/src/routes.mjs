@@ -183,15 +183,21 @@ export async function handleOps(request, env, options = {}) {
   if (request.method === 'GET' && url.pathname === '/health') {
     // Lisible par un service de surveillance externe gratuit : une tâche planifiée arrêtée
     // (« late ») ne peut pas envoyer elle-même d'alerte.
+    // `environment` et `payments` (ouverts ou fermés) : publics, lus par l'assistant de TEST pour
+    // vérifier qu'il parle au bon Worker et que les paiements restent fermés par défaut.
     let database = 'ok';
     let scheduler = 'unknown';
+    let payments = 'unknown';
     try {
-      const last = Number((await getSettings(ctx.db)).cron_last_run || 0);
+      const settings = await getSettings(ctx.db);
+      const last = Number(settings.cron_last_run || 0);
       scheduler = !last ? 'never' : deps.now() - last < 300 ? 'ok' : 'late';
+      payments = settings.shop_mode === 'open' && settings.payments_enabled === '1' ? 'open' : 'closed';
     } catch {
       database = 'unavailable';
     }
-    return json({ ok: database === 'ok', database, scheduler, stripe: deps.stripe ? (deps.stripe.live ? 'live' : 'test') : 'absent' });
+    return json({ ok: database === 'ok', database, scheduler, environment: env.ENVIRONMENT ?? 'local', payments,
+      stripe: deps.stripe ? (deps.stripe.live ? 'live' : 'test') : 'absent' });
   }
   return json({ error: 'not_found' }, 404);
 }

@@ -39,6 +39,7 @@ if (a === 'whoami') {
   const text = config();
   const db = cloud.d1.find((d) => d.name === words[3]);
   if (!db || var_(text, 'database_id') !== db.uuid) fail(`Couldn't find a D1 DB with the name or binding '${words[3]}'`);
+  if (process.env.FAKE_MIGRATIONS_FAIL) fail('A request to the Cloudflare API failed (simulé : connexion coupée)');
   if (db.migrated) out('✅ No migrations to apply!');
   else { db.migrated = true; save(); out('Migrations to be applied:\n│ 0001_init.sql │\n✅ Applied 6 migrations'); }
 } else if (a === 'secret' && b === 'list') {

@@ -51,7 +51,8 @@ test('T03 /health pour une surveillance externe : tâche planifiée jamais lanc�
   b.clock.t = at('2027-01-15T10:06:00Z');
   assert.equal((await health()).scheduler, 'never');
   await runScheduled(b.env, { deps: b.deps });
-  assert.deepEqual(await health(), { ok: true, database: 'ok', scheduler: 'ok', stripe: 'test' });
+  // Seulement des états publics : base, tâche, environnement, paiements ouverts ou non, mode Stripe.
+  assert.deepEqual(await health(), { ok: true, database: 'ok', scheduler: 'ok', environment: 'test', payments: 'open', stripe: 'test' });
   b.clock.t += 600;
   assert.equal((await health()).scheduler, 'late');
 });
@@ -77,7 +78,7 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
   const run = (args = [], extra = {}) => new Promise((ok) => {
     const child = spawn(process.execPath, [script, ...args], { env: { ...process.env, SAYLESS_WRANGLER: fileURLToPath(new URL('./fixtures/fake-wrangler.mjs', import.meta.url)),
       FAKE_WRANGLER_DIR: cloudDir, SAYLESS_SECRETS_DIR: secrets, SAYLESS_TEST_ENV_LOCAL_DIR: local,
-      SAYLESS_TEST_FETCH_BASE: `http://127.0.0.1:${server.address().port}`, ...extra } });
+      SAYLESS_TEST_FETCH_BASE: `http://127.0.0.1:${server.address().port}`, SAYLESS_TEST_ENV_CONFIRM: 'OUI', ...extra } });
     let text = '';
     child.stdout.on('data', (d) => { text += d; });
     child.stderr.on('data', (d) => { text += d; });
@@ -96,6 +97,7 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
 
     const second = await run([], { FAKE_SUBDOMAIN: 'sayless-essai' });
     assert.equal(second.code, 0, second.text);
+    assert.match(second.text, /Installation terminée et vérifiée/);
     assert.match(second.text, new RegExp(`STUDIO est en ligne : ${url.replace(/[.]/g, '\\.')}`));
     assert.match(second.text, /prêt pour la première inscription/);
     assert.match(second.text, /CODE-STUDIO\.txt/);
@@ -130,6 +132,8 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
     const state = await run(['etat']);
     assert.equal(state.code, 0, state.text);
     assert.match(state.text, /Base : ok ; tâche planifiée : never ; paiement Stripe : test/, 'lu sur le vrai code du Worker (Stripe simulé du banc)');
+    assert.match(state.text, /Environnement : staging ; paiements : fermés/, 'paiements fermés par défaut');
+    assert.match(state.text, /Environnement de TEST opérationnel/);
     const setting = await run(['reglage', 'EMAIL_FROM', 'SAYLESS <onboarding@resend.dev>'], { FAKE_SUBDOMAIN: 'sayless-essai' });
     assert.equal(setting.code, 0, setting.text);
     assert.equal(JSON.parse(readFileSync(join(cloudDir, 'cloud.json'), 'utf8')).workers['sayless-ops-test'].vars.EMAIL_FROM, 'SAYLESS <onboarding@resend.dev>');
@@ -139,3 +143,71 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+test('T05 assistant de TEST : jamais de succès annoncé si le contrôle final échoue ; accord explicite ; reprise après coupure ; Worker non isolé refusé', async () => {
+  const work = mkdtempSync(join(tmpdir(), 'sayless-assistant-'));
+  const secrets = join(work, 'secrets');
+  const cloudDir = join(work, 'cloud');
+  const local = join(work, 'local');
+  for (const d of [cloudDir, local]) mkdirSync(d);
+  const url = 'https://sayless-ops-test.sayless-essai.workers.dev';
+  const b = await bench({ 'TEST-M': 1 }, { payments: false });
+  Object.assign(b.env, { ENVIRONMENT: 'staging', STUDIO_ORIGIN: url, STUDIO_RP_ID: new URL(url).hostname });
+  const server = createServer(async (req, res) => {
+    const reply = await handleOps(new Request(`${url}${req.url}`), b.env, { deps: b.deps });
+    res.writeHead(reply.status, { 'Content-Type': 'application/json' });
+    res.end(await reply.text());
+  });
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  const script = fileURLToPath(new URL('../../scripts/test-env.mjs', import.meta.url));
+  const run = (args = [], extra = {}, input = '') => new Promise((ok) => {
+    const child = spawn(process.execPath, [script, ...args], { env: { ...process.env, SAYLESS_WRANGLER: fileURLToPath(new URL('./fixtures/fake-wrangler.mjs', import.meta.url)),
+      FAKE_WRANGLER_DIR: cloudDir, SAYLESS_SECRETS_DIR: secrets, SAYLESS_TEST_ENV_LOCAL_DIR: local, FAKE_SUBDOMAIN: 'sayless-essai',
+      SAYLESS_TEST_FETCH_BASE: `http://127.0.0.1:${server.address().port}`, ...extra } });
+    let text = '';
+    child.stdout.on('data', (d) => { text += d; });
+    child.stderr.on('data', (d) => { text += d; });
+    child.stdin.end(input);
+    child.on('close', (code) => ok({ code, text }));
+  });
+  const log = () => { try { return readFileSync(join(cloudDir, 'calls.log'), 'utf8').trim().split('\n').filter(Boolean); } catch { return []; } };
+  try {
+    // Sans « OUI » : rien n'est fait, aucun appel à Cloudflare.
+    const refused = await run([], {}, 'non\n');
+    assert.equal(refused.code, 1);
+    assert.match(refused.text, /Tape OUI pour continuer[\s\S]*Rien n’a été fait/);
+    assert.equal(log().length, 0);
+    // Coupure pendant les migrations : arrêt net, puis reprise sans recréer ni régénérer.
+    const cut = await run([], { FAKE_MIGRATIONS_FAIL: '1' }, 'OUI\n');
+    assert.equal(cut.code, 1);
+    assert.match(cut.text, /Les migrations ont échoué/);
+    assert.doesNotMatch(cut.text, /Installation terminée/);
+    const keys = readFileSync(join(secrets, 'worker-secrets.json'), 'utf8');
+    // Contrôle final négatif (base injoignable) : code 1, jamais « terminée ».
+    b.db.state.down = true;
+    const unhealthy = await run([], {}, 'oui\n');
+    b.db.state.down = false;
+    assert.equal(unhealthy.code, 1, unhealthy.text);
+    assert.match(unhealthy.text, /Installation INCOMPLÈTE/);
+    assert.doesNotMatch(unhealthy.text, /Installation terminée|STUDIO est en ligne/);
+    assert.equal(readFileSync(join(secrets, 'worker-secrets.json'), 'utf8'), keys, 'secrets jamais régénérés à la reprise');
+    const ok = await run([], {}, 'OUI\n');
+    assert.equal(ok.code, 0, ok.text);
+    assert.match(ok.text, /Installation terminée et vérifiée/);
+    const calls = log().map((l) => JSON.parse(l));
+    assert.equal(calls.filter((c) => c.args[0] === 'd1' && c.args[1] === 'create').length, 1, 'base créée une seule fois');
+    assert.equal(calls.filter((c) => c.args.includes('--secrets-file')).length, 1, 'secrets envoyés une seule fois');
+    // Worker qui n'est pas celui de TEST : refusé, même si tout répond.
+    b.env.ENVIRONMENT = 'production';
+    const wrong = await run(['etat']);
+    assert.equal(wrong.code, 1);
+    assert.match(wrong.text, /n’est pas un environnement de TEST isolé[\s\S]*NON opérationnel/);
+    b.env.ENVIRONMENT = 'staging';
+    // Réglage : redéploie, donc accord demandé.
+    assert.equal((await run(['reglage', 'EMAIL_FROM', 'SAYLESS <onboarding@resend.dev>'], {}, 'non\n')).code, 1);
+  } finally {
+    server.close();
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+

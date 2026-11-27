@@ -13,6 +13,7 @@
 // Stripe réel, ni boutique publique. Les secrets sont créés sur cet ordinateur et envoyés
 // directement à Cloudflare ; aucun n'est affiché. Chaque étape est vérifiée avant la suivante.
 import { spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +38,17 @@ const say = (line = '') => console.log(line);
 const stop = (...lines) => { throw new Stop(lines.join('\n')); };
 const step = (n, title) => say(`\n[${n}] ${title}`);
 const done = (detail) => say(`    OK : ${detail}`);
+
+// Accord explicite avant toute création ou mise en ligne chez Cloudflare (SAYLESS_TEST_ENV_CONFIRM :
+// réponse fournie d'avance, pour les tests automatiques seulement).
+async function confirm(question) {
+  let answer = process.env.SAYLESS_TEST_ENV_CONFIRM;
+  if (answer === undefined) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try { answer = await rl.question(`${question} Tape OUI pour continuer : `); } finally { rl.close(); }
+  }
+  if (String(answer).trim().toUpperCase() !== 'OUI') stop('Rien n’a été fait.');
+}
 
 let state = existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {};
 const save = () => writeFileSync(STATE, `${JSON.stringify(state, null, 2)}\n`);
@@ -139,6 +151,7 @@ function requireLogin() {
 
 async function install() {
   say('Environnement de TEST SAYLESS : adresse *.workers.dev, sans domaine, sans DNS, sans Stripe réel.');
+  await confirm('Cette commande crée ou met à jour la base, l’espace de sauvegarde et le Worker de TEST sur ton compte Cloudflare (offre gratuite).');
 
   step(1, 'Ordinateur et connexion Cloudflare');
   const [major, minor] = process.versions.node.split('.').map(Number);
@@ -232,7 +245,12 @@ async function install() {
   done(url);
 
   step(8, 'Contrôle en ligne');
-  await report(url);
+  if (await report(url)) {
+    say('\nInstallation terminée et vérifiée.');
+    return true;
+  }
+  say('\nInstallation INCOMPLÈTE : l’environnement de test n’est pas encore opérationnel. Ne passe pas à la suite.');
+  return false;
 }
 
 async function report(url) {
@@ -243,10 +261,15 @@ async function report(url) {
     return false;
   }
   const { health, studio } = seen;
-  const ok = health.ok === true && health.database === 'ok' && typeof studio.enrolled === 'boolean';
+  // Isolation : ce Worker doit être celui de TEST (staging), sans clé Stripe réelle.
+  const isolated = health.environment === 'staging' && health.stripe !== 'live';
+  const ok = health.ok === true && health.database === 'ok' && typeof studio.enrolled === 'boolean' && isolated;
   say(`    Base : ${health.database} ; tâche planifiée : ${health.scheduler} ; paiement Stripe : ${health.stripe}`);
+  say(`    Environnement : ${health.environment ?? 'inconnu'} ; paiements : ${health.payments === 'closed' ? 'fermés' : health.payments === 'open' ? 'OUVERTS' : 'inconnus'}`);
   say(`    STUDIO : ${studio.enrolled ? 'iPhone déjà inscrit' : typeof studio.enrolled === 'boolean' ? 'prêt pour la première inscription' : `réponse ${studio.status}`}`);
-  if (!ok) { say('    Contrôle incomplet : copie-moi ces deux lignes (elles ne contiennent aucun secret).'); return false; }
+  if (!isolated) say('    Ce Worker n’est pas un environnement de TEST isolé (ou porte une clé Stripe réelle) : arrêt.');
+  if (!ok) { say('    Contrôle incomplet : copie-moi ces lignes (elles ne contiennent aucun secret).'); return false; }
+  if (health.payments !== 'closed') say('    Attention : les paiements de test sont ouverts. Ils restent fermés tant que tu ne les ouvres pas dans STUDIO.');
   say(`\nSTUDIO est en ligne : ${url}`);
   if (!studio.enrolled) {
     say(`Code d’installation : dans le fichier ${join(SECRETS, 'CODE-STUDIO.txt')} (ouvre-le avec le Bloc-notes).`);
@@ -267,7 +290,9 @@ async function main() {
   if (!state.url || !existsSync(CONFIG)) stop('Environnement pas encore installé. Lance : node scripts/test-env.mjs');
   if (command === 'etat') {
     say(`Compte « ${state.account_name} » ; Worker ${WORKER} ; base ${DATABASE}`);
-    return report(state.url);
+    const ok = await report(state.url);
+    say(ok ? '\nEnvironnement de TEST opérationnel.' : '\nEnvironnement de TEST NON opérationnel : ne passe pas à la suite.');
+    return ok;
   }
   if (command === 'secret') {
     const name = rest[0];
@@ -281,6 +306,7 @@ async function main() {
   if (command === 'reglage') {
     const [name, ...value] = rest;
     if (!SETTING_NAMES.includes(name) || !value.length) stop(`Usage : node scripts/test-env.mjs reglage ${SETTING_NAMES.join('|')} "valeur"`);
+    await confirm(`${name} sera réglé et le Worker de TEST remis en ligne.`);
     state.settings = { ...state.settings, [name]: value.join(' ') };
     save();
     writeConfig();
