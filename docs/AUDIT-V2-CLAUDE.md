@@ -202,7 +202,19 @@ Cause : Miniflare 4 ouvre une connexion TCP locale par requête SQL ; Windows (1
 - Audit : 33 → 27 par la mise à jour des outils Cloudflare ; les 27 restantes sont dans l’ancien gabarit Next/vinext et ses outils, rien dans le code déployé. Proposition à Work : `DEPENDANCES.md`.
 - WebAuthn : `@simplewebauthn/server` 14.1.0 retenue après comparaison sur 46 cas (W01) et essai dans workerd sans `nodejs_compat`. Un seul écart : la bibliothèque accepte les réponses venues d’une autre origine, que SAYLESS refuse et continuera de refuser. Non intégrée avant l’accord de Work et du fondateur : `WEBAUTHN-BIBLIOTHEQUE.md`.
 
-## 13. Risques et limites restants
+## 13. Stabilisation du 27 novembre 2026 (livraison v1.4 de Work)
+
+| Point | Correction | Tests |
+| --- | --- | --- |
+| Intégration Work v1.4 (`ea66e60`) | Branche commune avancée sur la livraison de Work. Retrait du gabarit relu : aucun import cassé, audit 0, suites et recette rejouées. | 211 + 13, recette navigateur |
+| V14-R1 : e-mail Resend en double après 24 h | Premier essai enregistré avant l'appel. Reprise seulement pendant 23 h avec la même clé et la même requête. Au-delà, ou au 25e essai : « à vérifier », alerte et rapprochement dans STUDIO. Référence Resend gardée. Un refus net reste un échec ordinaire, une panne de Resend n'abandonne plus l'e-mail. | test de risque de Work, R19 à R21, U12 |
+| API v1.5 | Empreinte des CGV obligatoire pour une nouvelle tentative, sans aucune écriture en cas de refus. Reprise d'une tentative v1.4 sans empreinte préservée. | R22 ; 74 tests boutique et 13 d'intégration de Work |
+| Assistant Cloudflare TEST | Contrôle final négatif = « INCOMPLÈTE » et code 1. Accord « OUI » avant tout déploiement. Isolation vérifiée (staging, aucune clé Stripe réelle). Reprise après coupure. | T04, T05 |
+| Discord | Un salon par type d'événement, choisi par le serveur. Webhook unique en secours. Retry-After respecté, aucune donnée client. | T06 |
+| Face ID | SimpleWebAuthn 14.1.0 vérifie en plus de SAYLESS, désactivée jusqu'à la validation du fondateur. | 25 tests rejoués avec la bibliothèque, W01, recette navigateur, contre-épreuve |
+| CI | Régressions v1.4 et V14-R1 obligatoires, Face ID avec bibliothèque, builds boutique, limites gratuites, audits bloquants. | Linux et Windows |
+
+## 14. Risques et limites restants
 
 - Rien n’a été essayé sur Cloudflare réel, Stripe en mode test réel, Resend réel, un vrai iPhone (Safari, VoiceOver, notifications), ni avec un transporteur : procédure prête dans `docs/CLOUDFLARE-TEST.md`, à lancer avec l’accord du fondateur.
 - Offre gratuite : requêtes D1 et appels externes désormais comptés et bornés (section 12) ; les 10 ms de calcul par invocation ne se mesurent pas en local : à relever dans les métriques du Worker de test. La sauvegarde a sa propre minute.

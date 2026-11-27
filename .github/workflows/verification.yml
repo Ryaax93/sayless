@@ -40,8 +40,8 @@ jobs:
         run: |
           node --version
           npm --version
-      - name: Installation (package-lock.json)
-        run: npm ci
+      - name: Installation (package-lock.json, sans scripts d’installation)
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Backend, STUDIO et concurrence
         if: ${{ !cancelled() }}
         run: npm run test:backend
@@ -60,14 +60,31 @@ jobs:
       - name: Revue v1.3 de Work
         if: ${{ !cancelled() }}
         run: npm run --if-present test:review:v13
+      - name: Revue v1.4 de Work (6 régressions)
+        if: ${{ !cancelled() }}
+        run: npm run test:review:v14
+      - name: Risque V14-R1 (e-mail Resend après 24 h), désormais obligatoire
+        if: ${{ !cancelled() }}
+        run: npm run test:review:risks
+      - name: Face ID avec la vérification SimpleWebAuthn activée
+        if: ${{ !cancelled() }}
+        run: npm run test:webauthn:bibliotheque
+      - name: Boutique compilée, ordinaire et TEST fermée
+        if: ${{ !cancelled() }}
+        env:
+          SAYLESS_TEST_ORIGIN: https://sayless-boutique-test.pages.dev
+        run: |
+          npm run build:storefront
+          npm run build:storefront:test
       - name: Compilation Cloudflare (sans déploiement)
         if: ${{ !cancelled() }}
         run: npm run check:cloudflare
-      - name: Audit des dépendances livrées (informatif)
+      - name: Limites de l’offre gratuite (taille des bundles, aucun nodejs_compat)
         if: ${{ !cancelled() }}
-        continue-on-error: true
+        run: node scripts/check-free-plan.mjs
+      - name: Audit des dépendances livrées (zéro exigé)
+        if: ${{ !cancelled() }}
         run: npm audit --omit=dev
-      - name: Audit complet (informatif)
+      - name: Audit complet (zéro exigé)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: npm audit

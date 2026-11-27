@@ -1,5 +1,19 @@
 # Journal des modifications
 
+## 2026-11-27 — Claude : stabilisation finale avant Cloudflare TEST (livraison v1.4 de Work)
+
+Demandée par le fondateur le 27 novembre. Détail : `docs/AUDIT-V2-CLAUDE.md`, section 13.
+
+- **Intégration** : branche commune avancée sur Work `ea66e60` (sans `main` ni `v2`). Retrait du gabarit relu, sans import cassé ; audit npm complet et production à 0.
+- **V14-R1** : file d'envoi recréée (migration `0008_envois_rapprochement.sql`). Pour chaque e-mail : premier essai enregistré avant l'appel, enveloppe figée, référence Resend gardée. Reprise automatique seulement pendant 23 h (Resend garde sa clé 24 h), puis état « à vérifier » avec alerte et rapprochement dans STUDIO, confirmé par Face ID. Sauvegarde restaurée datée prudemment. Le test de risque de Work passe ; régressions R19 à R21 et U12.
+- **API v1.5** : `terms_sha256` obligatoire pour toute nouvelle tentative de paiement (400 si absente ou mal formée, 409 si différente, rien d'écrit). Reprise des tentatives v1.4 préservée. R22 ; contrat mis à jour.
+- **Assistant TEST** : jamais de succès annoncé si le contrôle final échoue (code 1). Accord « OUI » avant tout déploiement ; Worker non isolé refusé ; paiements fermés affichés. `/health` expose `environment` et `payments`. T04 complété, T05.
+- **Discord** : un salon par type d'événement, webhook unique en secours, Retry-After respecté, aucune donnée client. `docs/DISCORD.md` (interface Discord et PowerShell). T06.
+- **Face ID** : `@simplewebauthn/server` 14.1.0 en version exacte (commit de dépendance dédié `8253fe3`). Vérification supplémentaire prête et **désactivée** (`WEBAUTHN_ENGINE`) jusqu'à la validation du fondateur. 25 tests rejoués avec la bibliothèque, recette navigateur dans workerd sans `nodejs_compat`.
+- **CI** : régressions v1.4 et V14-R1 obligatoires, Face ID avec bibliothèque, builds boutique ordinaire et TEST, contrôle des limites gratuites (`scripts/check-free-plan.mjs`), audits bloquants.
+- **Procédure** : `docs/PROCEDURE-TEST-IPHONE.md` (PowerShell : vérifier, déployer Cloudflare TEST, installer STUDIO sur l'iPhone).
+- **Non testé** : Cloudflare réel, Face ID réel sur iPhone, CPU hébergé (10 ms), Discord et Resend réels, Stripe en mode test. Boxtal non opérationnel. Stock déclaré (S8/M14/L5) jamais chargé automatiquement.
+
 ## 2026-11-27 — Work : stabilisation API v1.4, sans déploiement
 
 Base de vérification `f633255` contenant Claude `7102f43`. PR nº 2 conservée en brouillon ; main/v2 et boutique publique intacts.

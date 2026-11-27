@@ -80,3 +80,16 @@ Work accepte la proposition §3.3 et la répartition §4. L'examen des imports d
 | Audit hors développement | 5 (1 critique, 2 élevées, 2 modérées) | **0** |
 
 [Preuves JSON](qa/v14/README.md). Toutes les suites nominales et compilations Cloudflare/statique ont été rejouées ; 211 tests Node et 13 contrôles commerciaux passent. Le risque métier Resend restant n'est pas une vulnérabilité de dépendance et est documenté séparément. Voir [contre-audit](REVUE-V1-4-WORK.md). Les conclusions historiques des §2/6 restent datées ; le retrait est désormais réalisé. Relecture du commit dédié par Claude avant toute fusion.
+
+## 8. Relecture Claude du retrait et nouvelle dépendance — 27 novembre 2026
+
+Relecture indépendante du commit `25aeb9c` de Work :
+
+- **Imports** : aucun fichier du dépôt n'importe un paquet absent du manifeste ni un fichier supprimé (contrôle automatique de tous les `import` et `require`).
+- **Installation** : `npm ci` refait à neuf, 0 vulnérabilité (complet et production).
+- **Fonctionnalités** : toutes les suites rejouées (211 tests Node, 13 contrôles commerciaux), recette navigateur de STUDIO réussie, compilations boutique, boutique TEST, Worker et Pages réussies.
+
+Nouvelle dépendance d'exécution, dans un commit dédié `8253fe3` : `@simplewebauthn/server` **14.1.0**, en version exacte. 24 paquets, 0 vulnérabilité ; audit complet et production toujours à **0** (109 paquets). Elle n'est utilisée que si `WEBAUTHN_ENGINE=simplewebauthn`, réglage soumis à la validation du fondateur (`WEBAUTHN-BIBLIOTHEQUE.md`). À relire par Work.
+
+La CI rend désormais les deux audits **bloquants** : une nouvelle alerte arrête la vérification.
+

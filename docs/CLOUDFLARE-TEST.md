@@ -1,5 +1,7 @@
 # Environnement de test Cloudflare — pas à pas sur Windows
 
+> **Procédure simplifiée en PowerShell (27 novembre)** : `PROCEDURE-TEST-IPHONE.md` (vérifier, déployer TEST, installer STUDIO sur l'iPhone). Ce document garde le détail des comptes et des étapes.
+
 **But** : installer SAYLESS STUDIO sur ton iPhone et l’essayer pour de vrai, dans un environnement **entièrement séparé** de la boutique actuelle. Tout reste gratuit. Le domaine saylessbrand.fr, le DNS, la boutique 1.0, le lien de paiement 1.0 et le Stripe réel ne sont **pas touchés**.
 
 Règles : une étape à la fois, vérifiée avant la suivante. Aucune clé secrète dans le chat, par e-mail ou dans GitHub : les secrets sont créés sur ton PC et envoyés directement à Cloudflare. Même si une clé Stripe réelle était saisie par erreur, l’environnement de test la refuse.
