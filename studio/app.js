@@ -538,6 +538,12 @@ const screens = {
     const tone = { ok: ['OK', ''], todo: ['À faire', 'wait'], wait: ['En attente', 'wait'], alert: ['Alerte', 'warn'] };
     return `${header('Santé du site', { back: ['more', 'Plus'], right: `<span class="s">${esc(h.environment)}</span>` })}<div class="body fade">${errorBox()}${noticeBox()}
       <div class="sheet">${h.checks.map((c) => `<div class="row top-align"><span class="grow"><span class="p strong block">${esc(c.name)}</span><span class="s block">${esc(c.detail)}</span></span>${pill(...tone[c.state])}</div>`).join('')}</div>
+      ${h.uncertain?.length ? `<section aria-labelledby="a-verifier"><h2 class="sec" id="a-verifier">E-mails à vérifier</h2><div class="sheet">
+        ${h.uncertain.map((u) => `<div class="row top-align"><span class="grow"><span class="p strong block">${esc(u.label)}${u.reference ? ` ${esc(u.reference)}` : ''}</span>
+        <span class="s block">Premier essai ${esc((u.first_attempt_at ?? '').slice(0, 16).replace('T', ' '))} UTC · ${esc(u.attempts)} essai(s)${u.provider_ref ? ` · Resend ${esc(u.provider_ref)}` : ''}</span></span>
+        ${btn('email-delivered', 'Il est parti', { cls: 'pill tall', fk: `ev:${u.id}`, extra: `data-value="${esc(u.id)}"` })}
+        ${btn('email-resend', 'Renvoyer', { cls: 'pill tall', fk: `er:${u.id}`, extra: `data-value="${esc(u.id)}"` })}</div>`).join('')}</div>
+        <p class="note">Resend n’a pas confirmé ces envois et sa protection contre les doublons a expiré. Cherche la référence dans Resend (Emails) : s’il apparaît, choisis « Il est parti » ; sinon « Renvoyer ».</p></section>` : ''}
       <section aria-labelledby="ouverture"><h2 class="sec" id="ouverture">Avant d’ouvrir la boutique 2.0</h2><div class="sheet">
         ${h.readiness.checks.map((c) => `<div class="row"><span class="dot ${c.ok ? 'rose' : c.blocker ? 'alerte' : 'muted'}"></span><span class="p grow">${esc(c.text)}</span>${c.ok ? '' : pill(c.blocker ? 'Bloquant' : 'Conseillé', c.blocker ? 'warn' : '')}</div>`).join('')}</div></section>
       ${state.data.backups?.configured ? `<section aria-labelledby="copies"><h2 class="sec" id="copies">Sauvegardes chiffrées</h2><div class="sheet">
@@ -556,7 +562,7 @@ const screens = {
       stock_adjustment: 'Ajustement de stock', view_customer_contact: 'Coordonnées consultées', view_archived_contact: 'Coordonnées archivées consultées', export_livre_recettes: 'Export du livre des recettes',
       export_orders: 'Export des commandes', order_prepared: 'Commande préparée', order_shipped: 'Commande expédiée', order_delivered: 'Commande remise', order_review_resolved: 'Commande vérifiée',
       refund_requested: 'Remboursement demandé', refund_recorded: 'Remboursement enregistré', return_check: 'Retour contrôlé', shop_opened: 'Boutique ouverte', shop_paused: 'Boutique en pause',
-      settings_changed: 'Réglages modifiés', backup_downloaded: 'Sauvegarde téléchargée', terms_published: 'CGV publiées', legacy_link_sale: 'Vente lien 1.0', legacy_sync: 'Synchronisation lien 1.0', drop_declared: 'Quantités déclarées',
+      settings_changed: 'Réglages modifiés', backup_downloaded: 'Sauvegarde téléchargée', email_reconciled: 'E-mail rapproché', terms_published: 'CGV publiées', legacy_link_sale: 'Vente lien 1.0', legacy_sync: 'Synchronisation lien 1.0', drop_declared: 'Quantités déclarées',
       product_drafted: 'Produit en brouillon', product_status: 'Statut de produit', price_changed: 'Prix modifié', finance_settings: 'Déclarations financières', push_subscribed: 'Notifications activées',
       request_received: 'Demande reçue', request_status: 'Demande traitée', notification_resolved: 'Alerte traitée', purge_customer_contacts: 'Coordonnées purgées', import_sale: 'Vente importée' };
     return `${header('Historique', { back: ['health', 'Santé du site'] })}<div class="body fade">${errorBox()}<div class="sheet">
@@ -941,6 +947,10 @@ const actions = {
   'backup-download': (el) => { const name = el.dataset.value; return sensitive(async () => { const r = await api('/api/admin/backups/download', { name });
     download(r.filename, r.content, 'application/json'); set({ notice: `Copie téléchargée : ${r.filename}` }); }); },
   'request-done': (el) => { const id = el.dataset.value; return guarded(async () => { await api('/api/admin/requests/status', { id, status: 'answered' }); await load('requests'); }); },
+  'email-delivered': (el) => { const id = Number(el.dataset.value); if (!window.confirm('Confirmer que cet e-mail apparaît bien dans Resend ?')) return undefined;
+    return sensitive(async () => { await api('/api/admin/outbox/reconcile', { id, decision: 'delivered' }); await load('health'); set({ notice: 'E-mail classé comme envoyé.' }); }); },
+  'email-resend': (el) => { const id = Number(el.dataset.value); if (!window.confirm('Renvoyer cet e-mail au client ? À faire seulement s’il n’apparaît pas dans Resend.')) return undefined;
+    return sensitive(async () => { await api('/api/admin/outbox/reconcile', { id, decision: 'resend' }); await load('health'); set({ notice: 'E-mail renvoyé.' }); }); },
 };
 function deviceLabel() {
   const ua = navigator.userAgent;

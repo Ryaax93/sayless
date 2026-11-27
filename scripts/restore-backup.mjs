@@ -23,7 +23,7 @@ const problems = checkDump(dump);
 const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}', d1Databases: ['DB'], compatibilityDate: '2026-05-15' }));
 try {
   const db = await mf.getD1Database('DB');
-  const after = await restoreDatabase(db, dump);
+  const after = await restoreDatabase(db, dump, { createdAt: JSON.parse(box).created_at });
   const counts = {};
   for (const table of ['orders', 'order_items', 'inventory', 'stock_movements', 'reservations', 'notifications', 'audit_log']) {
     if (dump.tables[table]) counts[table] = Object.values(await db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).first())[0];
@@ -32,6 +32,10 @@ try {
   console.log(`Copie du ${created} déchiffrée et restaurée dans une base locale jetable.`);
   console.log(`Lignes : ${Object.entries(counts).map(([t, n]) => `${t} ${n}`).join(', ')}`);
   console.log(`Stock : ${stock.map((s) => (s.confirmed_at === null ? `${s.size} à confirmer` : `${s.size} ${s.on_hand - s.reserved} libre(s)`)).join(' · ')}`);
+  if (dump.tables.outbox) {
+    const waiting = Object.values(await db.prepare(`SELECT COUNT(*) AS n FROM outbox WHERE channel = 'email' AND status IN ('pending', 'sending')`).first())[0];
+    if (waiting) console.log(`E-mails non confirmés dans la copie : ${waiting}. Après une vraie restauration, ils repartent dans les 23 h suivant la copie, sinon ils passent « à vérifier » dans STUDIO.`);
+  }
   const all = [...problems, ...after];
   if (all.length) {
     console.error(`ÉCHEC du contrôle : ${all.join(' ; ')}`);

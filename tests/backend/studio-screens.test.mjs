@@ -2,7 +2,7 @@
 // notifications, santé, réglages, drops, performances, demandes. Données de TEST uniquement.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createKV, event, fakeMail, PII, startDatabases, stopDatabases } from './helpers.mjs';
+import { createKV, event, fakeMail, PII, resendSimulator, startDatabases, stopDatabases } from './helpers.mjs';
 import { SoftAuthenticator, studio } from './studio-helpers.mjs';
 import { deliverOutbox } from '../../backend/src/notify.mjs';
 import { resendSender } from '../../backend/src/email.mjs';
@@ -397,4 +397,39 @@ test('U11 ventes 1.0 relues par lots : chaque appel de STUDIO sous 50 requêtes 
   const again = await syncAll();
   assert.deepEqual([again.checked, again.recorded, again.duplicates], [21, 0, 21], 'relire ne compte rien deux fois');
   assert.equal(await b.count("SELECT COUNT(*) FROM orders WHERE source = 'legacy_link'"), 21);
+});
+
+test('U12 V14-R1 e-mail « à vérifier » : listé dans Santé sans donnée personnelle ; rapprochement confirmé par Face ID ; « Renvoyer » et « Il est parti » journalisés', async () => {
+  const b = await signedIn();
+  const sim = resendSimulator(b.clock);
+  Object.assign(b.env, { RESEND_API_KEY: 're_test_uniquement', EMAIL_FROM: 'SAYLESS <commandes@example.invalid>' });
+  b.deps.senders = { email: resendSender(b.env, sim.transport) };
+  await b.inventory({ [SKU.S]: 2, [SKU.M]: 2, [SKU.L]: 2 });
+  await b.buy(SKU.M, '10.151.0.1');
+  await b.buy(SKU.L, '10.151.0.2');
+  sim.lose = true;
+  const { ctx, deps } = b.context();
+  await deliverOutbox(ctx, b.deps.senders, deps);
+  sim.lose = false;
+  b.clock.t += 86401;
+  await deliverOutbox(ctx, b.deps.senders, { ...deps, now: () => b.clock.t });
+  assert.equal(sim.deliveries, 2, 'deux confirmations acceptées, réponses perdues');
+  await b.login(b.auth);
+  const health = (await b.call('GET', '/api/admin/health')).body;
+  assert.equal(health.checks.find((c) => c.name === 'File d’envoi').state, 'alert');
+  assert.equal(health.uncertain.length, 2);
+  const orders = (await b.call('GET', '/api/admin/orders')).body.orders.map((o) => o.reference);
+  assert.ok(health.uncertain.every((u) => u.label === 'Confirmation de commande' && orders.includes(u.reference) && u.reason === 'idempotence_expiree'));
+  for (const value of [PII.email, PII.name, PII.phone]) assert.ok(!JSON.stringify(health).includes(value), 'aucune donnée personnelle');
+  const [first, second] = health.uncertain;
+  b.clock.t += 400; // confirmation Face ID expirée
+  assert.equal((await b.call('POST', '/api/admin/outbox/reconcile', { id: first.id, decision: 'resend' })).status, 403, 'Face ID exigé');
+  assert.equal((await b.sensitive('POST', '/api/admin/outbox/reconcile', { id: first.id, decision: 'resend' })).status, 200);
+  assert.equal(sim.deliveries, 3, 'renvoi décidé par le fondateur : un nouvel e-mail');
+  assert.equal((await b.sensitive('POST', '/api/admin/outbox/reconcile', { id: second.id, decision: 'delivered' })).status, 200);
+  assert.equal(sim.deliveries, 3, '« Il est parti » : rien n’est renvoyé');
+  assert.deepEqual((await b.rows('SELECT status FROM outbox WHERE id IN (?, ?) ORDER BY id', first.id, second.id)).map((r) => r.status), ['sent', 'sent']);
+  assert.equal((await b.sensitive('POST', '/api/admin/outbox/reconcile', { id: second.id, decision: 'resend' })).status, 404, 'déjà rapproché');
+  assert.deepEqual((await b.rows("SELECT result FROM audit_log WHERE action = 'email_reconciled' ORDER BY id")).map((r) => r.result), ['resend', 'delivered']);
+  assert.equal((await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'File d’envoi').state, 'ok');
 });

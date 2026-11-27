@@ -15,7 +15,7 @@
 // En cas d'échec, la copie défectueuse est retirée et les copies précédentes restent intactes.
 import { b64url, batch, fromB64url, getSettings, sha256Hex, sql } from './lib.mjs';
 import { invariants } from './stock.mjs';
-import { parisClock } from './notify.mjs';
+import { markRestoredEmails, parisClock } from './notify.mjs';
 
 const internal = (name) => name.startsWith('sqlite_') || name.startsWith('_cf_') || name === 'd1_migrations';
 const SCHEMA = `SELECT type, name, tbl_name, sql FROM sqlite_master
@@ -76,7 +76,9 @@ export function checkDump(dump) {
 
 // Restauration dans une base vide : tables, données, puis index et déclencheurs (les déclencheurs de
 // stock ne doivent pas rejouer les mouvements déjà appliqués). Par lots : peu de requêtes.
-export async function restoreDatabase(db, dump, { chunk = 200 } = {}) {
+// `createdAt` (instant de la copie) : les e-mails non confirmés de la copie ont pu partir depuis ;
+// leur protection contre les doublons est datée au plus tard de la copie (markRestoredEmails).
+export async function restoreDatabase(db, dump, { chunk = 200, createdAt = null } = {}) {
   const tables = dump.objects.filter((x) => x.type === 'table');
   if (tables.length) await db.batch(tables.map((o) => db.prepare(o.sql)));
   for (const [name, rows] of Object.entries(dump.tables)) {
@@ -90,6 +92,7 @@ export async function restoreDatabase(db, dump, { chunk = 200 } = {}) {
   }
   const rest = dump.objects.filter((x) => x.type !== 'table');
   if (rest.length) await db.batch(rest.map((o) => db.prepare(o.sql)));
+  if (createdAt && dump.tables.outbox?.length && 'uncertain_since' in dump.tables.outbox[0]) await markRestoredEmails(db, createdAt);
   return invariants(db);
 }
 

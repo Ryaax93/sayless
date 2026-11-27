@@ -197,7 +197,8 @@ async function confirmSale(env, order, session, deps) {
     await afterSale(env, order.id, deps, { announce: false });
   }
   // Mise en file de la confirmation, à chaque passage (premier webhook, renvoi, autre événement) :
-  // sans effet si elle est déjà en file ; une panne laisse l'intention en attente, jamais perdue.
+  // sans effet si elle est déjà en file ; une panne de file laisse l'intention en attente, reprise
+  // ensuite. L'envoi lui-même suit les règles de deliverOutbox (fenêtre de Resend, état « à vérifier »).
   await processMailIntents(env, deps, { only: confirmation });
   return { status: after.status };
 }

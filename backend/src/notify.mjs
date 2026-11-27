@@ -4,6 +4,7 @@
 import { all, batch, getSettings, one, pad4, sql } from './lib.mjs';
 import { pushReady } from './push.mjs';
 import { COST, fits } from './budget.mjs';
+import { emailEnvelope } from './email.mjs';
 
 const euros = (cents) => `${(cents / 100).toFixed(2).replace('.', ',')} €`;
 
@@ -73,13 +74,44 @@ export async function afterSale(env, orderId, deps, { announce = true } = {}) {
   }
 }
 
-// Envoi au moins une fois, sans doublon : réservation de la ligne (bail de 2 min), essais
-// espacés, ligne « morte » et alerte technique après 5 échecs.
+// Envoi au moins une fois : réservation de la ligne (bail de 2 min), essais espacés, ligne « morte »
+// et alerte technique après 5 échecs certains.
+// E-mails (Resend, clé d'idempotence gardée 24 h à partir du premier appel) : un échec ambigu
+// (réseau, délai, 408, 409, 5xx, arrêt pendant l'envoi) peut cacher un e-mail déjà accepté. On ne
+// le renvoie automatiquement que pendant EMAIL_SAFE_WINDOW après le premier essai, où la clé
+// protège encore contre un doublon. Passé ce délai, ou après EMAIL_MAX_ATTEMPTS essais, l'e-mail
+// passe « à vérifier » (uncertain) : alerte critique, rapprochement dans STUDIO avant tout nouvel
+// envoi. Pas de promesse d'envoi « exactement une fois » au-delà de cette fenêtre. Un refus net de
+// Resend (4xx) n'a rien envoyé : échec ordinaire. Enveloppe figée au premier essai ; contenu
+// chiffré figé dès la mise en file ; référence Resend conservée.
 // `only` : envoyer tout de suite une entrée précise (accusé de réception), sans attendre la tâche.
+export const EMAIL_SAFE_WINDOW = 23 * 3600; // une heure de marge sur les 24 h de Resend
+export const EMAIL_MAX_ATTEMPTS = 25;
+
+const outboxRef = (row) => row.dedupe.replace(/^email:/, '');
+
+async function parkUncertain(db, deps, row, since, reason) {
+  const parked = await batch(db, [sql(db, `UPDATE outbox SET status = 'uncertain', uncertain_since = ?, last_error = ?
+    WHERE id = ? AND status = ? AND attempts = ?`, since, reason, row.id, row.status, row.attempts)]);
+  if (!parked[0].meta.changes) return false;
+  await deps.notify?.({ kind: 'email_uncertain', ref: outboxRef(row), level: 'critical', title: 'E-mail client à vérifier',
+    body: `${emailLabel(row.dedupe)} : Resend n'a pas confirmé l'envoi et la protection contre les doublons a expiré. `
+      + 'Vérifie dans Resend s\'il est parti, puis dans STUDIO (Santé du site) choisis « Il est parti » ou « Renvoyer ».' });
+  return true;
+}
+
+// Libellé sans donnée personnelle (la référence de la commande ou de la demande seulement).
+export function emailLabel(dedupe) {
+  const [, kind, id] = /^email:([a-z_]+):(.+)$/.exec(dedupe) ?? [];
+  const names = { order_confirmation: 'Confirmation de commande', request_ack: 'Accusé de demande', shipped: 'Avis d\'expédition' };
+  return `${names[kind] ?? 'E-mail client'} ${id ?? ''}`.trim();
+}
+
 export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit = 25, only = null } = {}) {
   const { db } = env;
   const now = deps.now();
-  const rows = await all(db, `SELECT id, channel, dedupe, payload FROM outbox
+  const rows = await all(db, `SELECT id, channel, dedupe, payload, status, attempts, at, first_attempt_at, last_attempt_at,
+    uncertain_since, envelope, route FROM outbox
     WHERE status IN ('pending', 'sending') AND next_at <= ? ${only ? 'AND dedupe = ?' : ''} ORDER BY id LIMIT ?`,
   ...(only ? [now, only, limit] : [now, limit]));
   let sent = 0;
@@ -95,21 +127,39 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
       if (!fits(deps, push ? { queries: COST.outboxMessage.queries + 1 + devices * COST.pushDevice.queries, external: devices * COST.pushDevice.external }
         : COST.outboxMessage)) break; // la suite à la minute suivante
     }
-    const claim = await batch(db, [sql(db, `UPDATE outbox SET status = 'sending', attempts = attempts + 1, next_at = ?
-      WHERE id = ? AND status IN ('pending', 'sending') AND next_at <= ?`, now + 120, row.id, now)]);
+    const email = row.channel === 'email';
+    // Bail expiré pendant un envoi d'e-mail : l'essai s'est arrêté sans issue connue.
+    const since = email && row.status === 'sending' ? (row.uncertain_since ?? row.last_attempt_at ?? row.at) : row.uncertain_since;
+    if (email && since !== null && (now >= (row.first_attempt_at ?? row.at) + EMAIL_SAFE_WINDOW || row.attempts >= EMAIL_MAX_ATTEMPTS)) {
+      await parkUncertain(db, deps, row, since, now >= (row.first_attempt_at ?? row.at) + EMAIL_SAFE_WINDOW ? 'idempotence_expiree' : 'essais_epuises');
+      continue;
+    }
+    const envelope = email ? (row.envelope ?? JSON.stringify(emailEnvelope(env))) : null;
+    const claim = await batch(db, [sql(db, `UPDATE outbox SET status = 'sending', attempts = attempts + 1, next_at = ?,
+      first_attempt_at = COALESCE(first_attempt_at, ?), last_attempt_at = ?, uncertain_since = ?, envelope = COALESCE(envelope, ?)
+      WHERE id = ? AND status IN ('pending', 'sending') AND next_at <= ?`, now + 120, now, now, since, envelope, row.id, now)]);
     if (!claim[0].meta.changes) continue;
     const send = senders[row.channel];
+    const attempts = row.attempts + 1;
     try {
       if (!send) throw new Error('canal non configuré');
       // E-mails : contenu chiffré, ouvert par l'expéditeur seulement au moment de l'envoi.
-      await send(row.channel === 'email' ? row.payload : JSON.parse(row.payload), row);
-      await batch(db, [sql(db, `UPDATE outbox SET status = 'sent' WHERE id = ?`, row.id)]);
+      const receipt = await send(email ? row.payload : JSON.parse(row.payload),
+        { ...row, attempts, envelope: email ? JSON.parse(envelope) : null });
+      await batch(db, [sql(db, `UPDATE outbox SET status = 'sent', provider_ref = ?, last_error = NULL WHERE id = ?`,
+        typeof receipt?.id === 'string' ? receipt.id : null, row.id)]);
       sent += 1;
-    } catch {
-      const after = await one(db, 'SELECT attempts FROM outbox WHERE id = ?', row.id);
-      const dead = after.attempts >= maxAttempts;
-      await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ? WHERE id = ?`,
-        dead ? 'dead' : 'pending', now + Math.min(60 * 2 ** after.attempts, 3600), row.id)]);
+    } catch (error) {
+      // Échec ambigu d'un e-mail : peut-être parti ; l'incertitude date de cet essai (ou d'avant).
+      const uncertain = email && (since !== null || error?.ambiguous === true) ? (since ?? now) : null;
+      const code = String(error?.message ?? 'erreur').slice(0, 40);
+      if (uncertain !== null && attempts >= EMAIL_MAX_ATTEMPTS) {
+        await parkUncertain(db, deps, { ...row, status: 'sending', attempts }, uncertain, 'essais_epuises');
+        continue;
+      }
+      const dead = uncertain === null && attempts >= maxAttempts; // échec certain : rien n'est parti
+      await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ?, uncertain_since = ?, last_error = ? WHERE id = ?`,
+        dead ? 'dead' : 'pending', now + Math.min(60 * 2 ** attempts, 3600), uncertain, code, row.id)]);
       if (dead) {
         await deps.notify({ kind: 'technical', ref: `outbox:${row.id}`, level: 'critical',
           title: 'Notification non distribuée', body: `Canal ${row.channel} : échec après ${maxAttempts} essais.` });
@@ -117,6 +167,25 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
     }
   }
   return sent;
+}
+
+// Après le rapprochement par le fondateur (STUDIO) : « parti » clôt la ligne ; « renvoyer » la remet
+// en file avec une nouvelle fenêtre (même clé : si Resend la connaît encore, aucun doublon).
+export async function reconcileEmail(db, id, decision, now) {
+  const ok = await batch(db, [decision === 'delivered'
+    ? sql(db, `UPDATE outbox SET status = 'sent', last_error = 'confirme_par_le_fondateur' WHERE id = ? AND status = 'uncertain'`, id)
+    : sql(db, `UPDATE outbox SET status = 'pending', attempts = 0, next_at = ?, first_attempt_at = NULL, last_attempt_at = NULL,
+        uncertain_since = NULL, last_error = 'renvoi_demande' WHERE id = ? AND status = 'uncertain'`, now, id)]);
+  return ok[0].meta.changes === 1;
+}
+
+// Sauvegarde restaurée : un e-mail non confirmé a pu partir après la copie. Sa fenêtre de protection
+// court au plus tard depuis l'instant de la copie ; passé ce délai, il sera « à vérifier ».
+export async function markRestoredEmails(db, createdAt) {
+  const r = await db.prepare(`UPDATE outbox SET first_attempt_at = MIN(COALESCE(first_attempt_at, ?), ?),
+    uncertain_since = COALESCE(uncertain_since, ?) WHERE channel = 'email' AND status IN ('pending', 'sending')`)
+    .bind(createdAt, createdAt, createdAt).run();
+  return r.meta?.changes ?? 0;
 }
 
 // Discord : webhook entrant (gratuit, aucun bot). Aucune mention possible (@everyone neutralisé).

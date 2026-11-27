@@ -9,7 +9,7 @@ import { stripeMode, stripeReady } from './stripe.mjs';
 import { currentTerms, publishTerms, termsDocument } from './terms.mjs';
 import { exportRecettes, csvSafe, inspectReturn, viewContact } from './operations.mjs';
 import { legacyReviewText, recordLegacyLinkSale } from './payments.mjs';
-import { configuredChannels } from './notify.mjs';
+import { configuredChannels, deliverOutbox, emailLabel, reconcileEmail } from './notify.mjs';
 import { emailReady } from './email.mjs';
 import { intentStatement, pendingIntents, processMailIntents } from './intents.mjs';
 import { pushReady, validSubscription } from './push.mjs';
@@ -405,6 +405,12 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       const lastEvent = (await one(ctx.db, 'SELECT MAX(at) AS t FROM processed_events')).t;
       const dead = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead'`)).n;
       const queued = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status IN ('pending', 'sending')`)).n;
+      // E-mails à rapprocher (V14-R1) : référence de commande ou de demande seulement, aucune adresse.
+      const uncertain = (await all(ctx.db, `SELECT o.id, o.dedupe, o.first_attempt_at, o.last_attempt_at, o.attempts, o.provider_ref, o.last_error,
+        (SELECT reference FROM orders WHERE id = substr(o.dedupe, instr(substr(o.dedupe, 7), ':') + 7)) AS reference
+        FROM outbox o WHERE o.status = 'uncertain' ORDER BY o.id LIMIT 20`)).map((r) => ({ id: r.id, label: emailLabel(r.dedupe).replace(/ [^ ]+$/, ''),
+        reference: r.reference ?? null, first_attempt_at: r.first_attempt_at ? iso(r.first_attempt_at) : null, last_attempt_at: r.last_attempt_at ? iso(r.last_attempt_at) : null,
+        attempts: r.attempts, provider_ref: r.provider_ref, reason: r.last_error }));
       const stuck = await pendingIntents(ctx.db, now); // e-mails clients pas encore mis en file depuis 10 min
       const cron = Number(settings.cron_last_run || 0);
       const backups = ctx.BACKUPS ? await listBackups(ctx.BACKUPS).catch(() => null) : null;
@@ -418,12 +424,24 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         { name: 'Notifications Discord', state: configuredChannels(ctx).includes('discord') ? 'ok' : 'todo', detail: configuredChannels(ctx).includes('discord') ? 'Webhook configuré' : 'Webhook de salon privé à saisir' },
         { name: 'Notifications iPhone', state: pushReady(ctx) ? 'ok' : 'todo', detail: pushReady(ctx) ? 'Clés configurées' : 'Clés VAPID à saisir' },
         { name: 'E-mails clients', state: emailReady(ctx) ? 'ok' : 'todo', detail: emailReady(ctx) ? `Expéditeur ${ctx.EMAIL_FROM}` : 'Resend et domaine vérifié à configurer' },
-        { name: 'File d’envoi', state: dead || stuck ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente`,
+        { name: 'File d’envoi', state: dead || stuck || uncertain.length ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente`,
+          ...(uncertain.length ? [`${uncertain.length} e-mail(s) client à vérifier dans Resend (voir plus bas)`] : []),
           ...(stuck ? [`${stuck} e-mail(s) client à mettre en file (nouvel essai automatique)`] : [])].join(' ; ') },
         backupCheck({ error: settings.backup_last_error, verified, now, configured: Boolean(ctx.BACKUPS && ctx.BACKUP_PUBLIC_KEY), kept: backups?.length ?? null }),
         { name: 'Conservation des données', state: settings.retention_enabled === '1' ? 'ok' : 'wait', detail: settings.retention_enabled === '1' ? 'Purge automatique active' : 'Purge coupée, en attente de ta validation des durées' },
       ];
-      return json({ checks, readiness: ready, environment: ctx.ENVIRONMENT ?? 'local', origins: { shop: ctx.PUBLIC_ORIGIN ?? null, studio: config.origin } });
+      return json({ checks, readiness: ready, uncertain, environment: ctx.ENVIRONMENT ?? 'local', origins: { shop: ctx.PUBLIC_ORIGIN ?? null, studio: config.origin } });
+    }
+    // Rapprochement d'un e-mail « à vérifier » : décision du fondateur après contrôle dans Resend.
+    // « delivered » clôt la ligne ; « resend » la renvoie (même clé d'idempotence). Face ID requis.
+    case 'POST /api/admin/outbox/reconcile': {
+      requireStepUp();
+      const body = await readJsonBody(request);
+      if (!Number.isInteger(body.id) || !['delivered', 'resend'].includes(body.decision)) throw fail('invalid_request');
+      if (!(await reconcileEmail(ctx.db, body.id, body.decision, now))) throw fail('not_found');
+      await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'email_reconciled', `outbox:${body.id}`, body.decision)]);
+      if (body.decision === 'resend') await deliverOutbox(ctx, deps.senders, deps, { only: (await one(ctx.db, 'SELECT dedupe FROM outbox WHERE id = ?', body.id)).dedupe });
+      return json({ ok: true, decision: body.decision });
     }
     // Copies chiffrées : liste, et téléchargement (copie hors ligne hebdomadaire). Illisibles sans
     // la clé privée du fondateur ; le téléchargement est tout de même confirmé par Face ID et noté.

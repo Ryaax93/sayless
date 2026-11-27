@@ -11,7 +11,7 @@ import { recordInventory } from '../../backend/src/stock.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
 
 const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql',
-  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql'];
+  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql'];
 // Texte de CGV de TEST uniquement (jamais publié) : sert à vérifier la version signée dans le devis.
 export const TEST_TERMS = { version: '2026-11', body: `CGV DE TEST — document fictif utilisé par les essais automatiques. ${'Clause de test. '.repeat(20)}` };
 export const TEST_LINK = { id: 'plink_test', price: 'price_test_lien' };
@@ -386,3 +386,26 @@ function helpersFor(b) {
 }
 
 export const parallel = (n, fn) => Promise.all(Array.from({ length: n }, (_, i) => fn(i)));
+
+// Resend simulé : une clé d'idempotence protège 24 h à partir de son premier appel ; même clé avec
+// un autre contenu = 409 ; `lose` : e-mail accepté mais réponse perdue ; `refuse` : réponse d'erreur
+// renvoyée avant acceptation. Aucun e-mail réel.
+export function resendSimulator(clock) {
+  const keys = new Map();
+  const sim = { deliveries: 0, requests: [], lose: false, refuse: null };
+  sim.transport = async (url, init) => {
+    const key = init.headers['Idempotency-Key'];
+    sim.requests.push({ key, from: JSON.parse(init.body).from });
+    if (sim.refuse) return new Response('{"name":"erreur_simulee"}', { status: sim.refuse });
+    const known = keys.get(key);
+    if (known && clock.t - known.at < 86400) {
+      if (known.body !== init.body) return new Response('{"name":"invalid_idempotent_request"}', { status: 409 });
+    } else {
+      keys.set(key, { at: clock.t, body: init.body, id: `re_test_${keys.size + 1}` });
+      sim.deliveries += 1;
+    }
+    if (sim.lose) throw new TypeError('fetch failed');
+    return new Response(JSON.stringify({ id: keys.get(key).id }), { status: 200 });
+  };
+  return sim;
+}

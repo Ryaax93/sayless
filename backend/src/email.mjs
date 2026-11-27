@@ -21,17 +21,38 @@ export async function queueEmail(env, { dedupe, to, subject, text }, now) {
   return true;
 }
 
-// Envoi : la clé de la file sert de clé d'idempotence chez Resend (aucun double envoi sur un nouvel essai).
+// Enveloppe d'un e-mail (expéditeur, adresse de réponse) : figée au premier essai, pour que chaque
+// nouvel essai envoie exactement la même requête sous la même clé d'idempotence.
+export function emailEnvelope(env) {
+  return { from: env.EMAIL_FROM, ...(env.EMAIL_REPLY_TO && validEmail(senderAddress(env.EMAIL_REPLY_TO)) ? { reply_to: env.EMAIL_REPLY_TO } : {}) };
+}
+
+// Envoi : la clé de la file sert de clé d'idempotence chez Resend, qui la garde 24 heures à partir
+// du premier appel : un nouvel essai dans ce délai ne crée pas de second e-mail (la file borne les
+// essais à cette fenêtre, voir deliverOutbox). Renvoie la référence Resend de l'e-mail.
+// Erreur « ambiguous » : la requête a pu être acceptée (réseau, délai, 408, 409, 5xx) ; sinon Resend
+// a refusé (4xx) ou rien n'a été envoyé.
 export function resendSender(env, transport = fetch) {
   return async (payload, row) => {
     const message = await openPayload(env, payload, `outbox:${row.dedupe}`);
-    const response = await transport('https://api.resend.com/emails', {
-      method: 'POST', signal: AbortSignal.timeout(8000),
-      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': row.dedupe.slice(0, 256) },
-      body: JSON.stringify({ from: env.EMAIL_FROM, to: [message.to], subject: message.subject, text: message.text,
-        ...(env.EMAIL_REPLY_TO && validEmail(senderAddress(env.EMAIL_REPLY_TO)) ? { reply_to: env.EMAIL_REPLY_TO } : {}) }),
-    });
-    if (!response.ok) throw new Error(`resend_${response.status}`);
+    const envelope = row.envelope ?? emailEnvelope(env);
+    let response;
+    try {
+      response = await transport('https://api.resend.com/emails', {
+        method: 'POST', signal: AbortSignal.timeout(8000),
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': row.dedupe.slice(0, 256) },
+        body: JSON.stringify({ from: envelope.from, to: [message.to], subject: message.subject, text: message.text,
+          ...(envelope.reply_to ? { reply_to: envelope.reply_to } : {}) }),
+      });
+    } catch (cause) {
+      throw Object.assign(new Error('resend_network'), { ambiguous: true, cause });
+    }
+    if (!response.ok) {
+      throw Object.assign(new Error(`resend_${response.status}`), { status: response.status,
+        ambiguous: response.status >= 500 || response.status === 408 || response.status === 409 });
+    }
+    const receipt = await response.json().catch(() => ({}));
+    return { id: typeof receipt?.id === 'string' ? receipt.id.slice(0, 100) : null };
   };
 }
 

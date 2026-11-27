@@ -2,7 +2,7 @@
 // Données de test uniquement : SKU TEST-*, faux clients, Stripe et transporteur simulés.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { bench, createKV, emptyDatabase, event, parallel, PII, startDatabases, stopDatabases, T0, TEST_TERMS } from './helpers.mjs';
+import { bench, createKV, emptyDatabase, event, migrate, parallel, PII, resendSimulator, startDatabases, stopDatabases, T0, TEST_TERMS } from './helpers.mjs';
 import { checkDump, dumpDatabase, listBackups, maybeDailyBackup, openBackup, restoreDatabase } from '../../backend/src/backup.mjs';
 import { buyLabel, viewContact } from '../../backend/src/operations.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
@@ -11,7 +11,7 @@ import { handlePublicApi, runScheduled } from '../../backend/src/routes.mjs';
 import { processMailIntents } from '../../backend/src/intents.mjs';
 import { b64url, sha256Hex } from '../../backend/src/lib.mjs';
 import { COST } from '../../backend/src/budget.mjs';
-import { deliverOutbox } from '../../backend/src/notify.mjs';
+import { deliverOutbox, EMAIL_MAX_ATTEMPTS } from '../../backend/src/notify.mjs';
 
 before(startDatabases);
 after(stopDatabases);
@@ -605,4 +605,136 @@ test('R18 offre gratuite : webhook de la dernière pièce (fin du drop) sous 50 
   }
   assert.ok(await l.count("SELECT COUNT(*) FROM notifications WHERE kind = 'drop_sold_out'"), 'fin du drop signalée');
   assert.ok(worst <= COST.legacySale.queries, `vente 1.0 la plus coûteuse : ${worst} requêtes pour ${COST.legacySale.queries} prévues`);
+});
+
+// ---------- 6. V14-R1 : e-mails Resend, réponse perdue et fenêtre d'idempotence (24 h) ----------
+async function confirmationPending(stock = 2) {
+  const b = await bench({ 'TEST-M': stock });
+  const sim = resendSimulator(b.clock);
+  b.deps.transport = sim.transport;
+  Object.assign(b.env, MAIL);
+  const res = await b.buy('TEST-M', '10.230.0.1');
+  const { id } = await b.real.prepare('SELECT id FROM orders WHERE stripe_session_id = ?').bind(res.sid).first();
+  const row = await b.real.prepare(`SELECT id, dedupe FROM outbox WHERE dedupe = ?`).bind(`email:order_confirmation:${id}`).first();
+  const deliver = () => run(b, (ctx, deps) => deliverOutbox(ctx, deps.senders, deps, { only: row.dedupe }));
+  const state = () => b.real.prepare('SELECT status, attempts, first_attempt_at, uncertain_since, provider_ref, envelope, last_error FROM outbox WHERE id = ?').bind(row.id).first();
+  return { b, sim, row, deliver, state, orderId: id };
+}
+
+test('R19 V14-R1 : réponse perdue, reprise dans les 23 h sans doublon ; au-delà, « à vérifier » et alerte, jamais de second envoi automatique', async () => {
+  // Reprise dans la fenêtre : Resend reconnaît la clé, un seul e-mail, référence Resend gardée.
+  const a = await confirmationPending();
+  a.sim.lose = true;
+  await a.deliver();
+  assert.deepEqual([a.sim.deliveries, (await a.state()).status], [1, 'pending']);
+  assert.ok((await a.state()).first_attempt_at && (await a.state()).uncertain_since, 'premier essai et incertitude enregistrés avant toute reprise');
+  a.sim.lose = false;
+  a.b.clock.t += 22 * 3600;
+  await a.deliver();
+  assert.deepEqual([a.sim.deliveries, (await a.state()).status, (await a.state()).provider_ref], [1, 'sent', 're_test_1']);
+
+  // Reprise après 23 h : livraison incertaine, rapprochement demandé, aucun renvoi.
+  const c = await confirmationPending();
+  c.sim.lose = true;
+  await c.deliver();
+  c.sim.lose = false;
+  c.b.clock.t += 86401;
+  await c.deliver();
+  await c.deliver();
+  assert.deepEqual([c.sim.deliveries, (await c.state()).status, (await c.state()).last_error], [1, 'uncertain', 'idempotence_expiree']);
+  const alert = await c.b.real.prepare("SELECT level, title, body FROM notifications WHERE kind = 'email_uncertain'").first();
+  assert.equal(alert.level, 'critical');
+  for (const value of [PII.email, PII.name, PII.phone, PII.address.line1]) {
+    assert.ok(!JSON.stringify(alert).includes(value), 'alerte sans donnée personnelle');
+    assert.ok(!(await c.b.rows("SELECT payload FROM outbox WHERE channel <> 'email'")).some((r) => r.payload.includes(value)), 'notifications sans donnée personnelle');
+  }
+
+  // Arrêt pendant l'envoi (accepté, ligne jamais marquée « envoyée ») : reprise sûre à l'expiration du bail.
+  const d = await confirmationPending();
+  const real = d.sim.transport;
+  d.b.deps.transport = async (url, init) => { const r = await real(url, init); d.b.db.state.down = true; return r; };
+  await assert.rejects(d.deliver());
+  d.b.db.state.down = false;
+  d.b.deps.transport = real;
+  assert.equal((await d.state()).status, 'sending', 'ligne laissée en cours d’envoi par l’arrêt');
+  d.b.clock.t += 121;
+  await d.deliver();
+  assert.deepEqual([d.sim.deliveries, (await d.state()).status], [1, 'sent']);
+  // Même arrêt, reprise seulement le lendemain : à vérifier.
+  const e = await confirmationPending();
+  e.b.deps.transport = async (url, init) => { const r = await e.sim.transport(url, init); e.b.db.state.down = true; return r; };
+  await assert.rejects(e.deliver());
+  e.b.db.state.down = false;
+  e.b.deps.transport = e.sim.transport;
+  e.b.clock.t += 86400;
+  await e.deliver();
+  assert.deepEqual([e.sim.deliveries, (await e.state()).status], [1, 'uncertain']);
+
+  // Deux passages simultanés : une seule réservation de la ligne, un seul appel.
+  const f = await confirmationPending();
+  await Promise.all([f.deliver(), f.deliver(), f.deliver()]);
+  assert.deepEqual([f.sim.deliveries, f.sim.requests.length, (await f.state()).status], [1, 1, 'sent']);
+
+  // Expéditeur modifié entre deux essais : la requête reste identique (enveloppe figée), pas de 409.
+  const g = await confirmationPending();
+  g.sim.lose = true;
+  await g.deliver();
+  g.sim.lose = false;
+  g.b.env.EMAIL_FROM = 'SAYLESS <autre-adresse@example.invalid>';
+  g.b.clock.t += 600;
+  await g.deliver();
+  assert.deepEqual([g.sim.deliveries, (await g.state()).status, [...new Set(g.sim.requests.map((r) => r.from))]], [1, 'sent', [MAIL.EMAIL_FROM]]);
+});
+
+test('R20 V14-R1 : refus net de Resend = échec ordinaire ; panne de Resend = essais poursuivis dans la fenêtre ; essais bornés', async () => {
+  // Refus 422 : rien n'est parti ; cinq essais puis ligne morte et alerte, jamais « à vérifier ».
+  const a = await confirmationPending();
+  a.sim.refuse = 422;
+  for (let i = 0; i < 5; i += 1) { await a.deliver(); a.b.clock.t += 3600; }
+  assert.deepEqual([a.sim.deliveries, (await a.state()).status, (await a.state()).uncertain_since], [0, 'dead', null]);
+  // Panne de Resend (503) pendant 7 essais : pas abandonné au 5e, envoyé une fois au retour.
+  const b = await confirmationPending();
+  b.sim.refuse = 503;
+  for (let i = 0; i < 7; i += 1) { await b.deliver(); b.b.clock.t += 3600; }
+  assert.equal((await b.state()).status, 'pending', 'toujours en file pendant la fenêtre');
+  b.sim.refuse = null;
+  await b.deliver();
+  assert.deepEqual([b.sim.deliveries, (await b.state()).status, (await b.state()).attempts], [1, 'sent', 8]);
+  // Essais incertains bornés : au 25e, à vérifier même dans la fenêtre.
+  const c = await confirmationPending();
+  c.sim.lose = true;
+  await c.deliver();
+  await c.b.real.prepare('UPDATE outbox SET attempts = ?, next_at = 0 WHERE id = ?').bind(EMAIL_MAX_ATTEMPTS - 1, c.row.id).run();
+  await c.deliver();
+  assert.deepEqual([(await c.state()).status, (await c.state()).last_error, c.sim.deliveries], ['uncertain', 'essais_epuises', 1]);
+});
+
+test('R21 V14-R1 : sauvegarde restaurée et lignes d’avant la migration datées prudemment', async () => {
+  const pending = async () => {
+    const x = await confirmationPending();
+    const dump = await dumpDatabase(x.b.real);
+    return { x, dump };
+  };
+  // Copie de plus de 23 h : l'e-mail a pu partir après la copie ; il passe à vérifier.
+  const { x: old, dump: oldDump } = await pending();
+  const restoredOld = await emptyDatabase();
+  assert.deepEqual(await restoreDatabase(restoredOld, oldDump, { createdAt: old.b.clock.t - 24 * 3600 }), []);
+  assert.equal(await old.b.count(`SELECT COUNT(*) FROM outbox WHERE channel = 'email'`), 1);
+  const fromOld = await restoredOld.prepare(`SELECT first_attempt_at, uncertain_since FROM outbox WHERE channel = 'email'`).first();
+  assert.deepEqual(fromOld, { first_attempt_at: old.b.clock.t - 24 * 3600, uncertain_since: old.b.clock.t - 24 * 3600 });
+  // Copie récente : la protection court encore, l'e-mail part normalement.
+  const { x: recent, dump: recentDump } = await pending();
+  const restoredRecent = await emptyDatabase();
+  assert.deepEqual(await restoreDatabase(restoredRecent, recentDump, { createdAt: recent.b.clock.t - 3600 }), []);
+  assert.equal((await restoredRecent.prepare(`SELECT first_attempt_at FROM outbox WHERE channel = 'email'`).first()).first_attempt_at, recent.b.clock.t - 3600);
+  // Ligne essayée avant la migration 0008 : premier essai et incertitude datés de l'entrée en file.
+  const db = await emptyDatabase();
+  await migrate(db, ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql', '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql']);
+  await db.prepare(`INSERT INTO outbox (channel, dedupe, payload, status, attempts, next_at, at) VALUES ('email', 'email:order_confirmation:avant', 'x', 'pending', 2, 0, 1000),
+    ('email', 'email:order_confirmation:jamais', 'x', 'pending', 0, 0, 1000), ('discord', 'discord:test:avant', '{}', 'pending', 1, 0, 1000)`).run();
+  await migrate(db, ['0008_envois_rapprochement.sql']);
+  assert.deepEqual((await db.prepare('SELECT dedupe, first_attempt_at, uncertain_since FROM outbox ORDER BY id').all()).results, [
+    { dedupe: 'email:order_confirmation:avant', first_attempt_at: 1000, uncertain_since: 1000 },
+    { dedupe: 'email:order_confirmation:jamais', first_attempt_at: null, uncertain_since: null },
+    { dedupe: 'discord:test:avant', first_attempt_at: 1000, uncertain_since: null }]);
 });
