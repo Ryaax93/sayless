@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHmac} from 'node:crypto';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
-import {stmt,getInventory,initializeInventory,reserve,getOrder,attachSession,applySessionEvent,recordRefund,adjustStock,restockReturn} from '../server/inventory.mjs';
-import {verifyStripeSignature,stripeReady,StripeTestClient,startTestCheckout,handleStripeWebhook,reconcileOrder} from '../server/stripe.mjs';
-import {handleRequest} from '../server/api.mjs';
+import {stmt,getInventory,initializeInventory,reserve,getOrder,attachSession,applySessionEvent,recordRefund,adjustStock,restockReturn} from './legacy-fixtures/inventory.mjs';
+import {verifyStripeSignature,stripeReady,StripeTestClient,startTestCheckout,handleStripeWebhook,reconcileOrder} from './legacy-fixtures/stripe.mjs';
+import {handleRequest} from './legacy-fixtures/api.mjs';
 
 let mf,db;
 const key=()=>crypto.randomUUID();
@@ -22,7 +22,7 @@ before(async()=>{
  mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:'export default {fetch(){return new Response("ok")}}',d1Databases:['DB'],compatibilityDate:'2026-05-15'}));
  db=await mf.getD1Database('DB');
  for(const name of ['0000_sweet_warbird.sql','0001_inventory_guards.sql']){
-  const sql=await readFile(new URL('../drizzle/'+name,import.meta.url),'utf8');
+  const sql=await readFile(new URL('./legacy-fixtures/'+name,import.meta.url),'utf8');
   for(const part of sql.split('--> statement-breakpoint').map(x=>x.trim()).filter(Boolean))await db.prepare(part).run();
  }
 });

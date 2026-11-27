@@ -1,5 +1,11 @@
 # Journal des modifications
 
+## 2026-11-27 — Work : retrait du gabarit hérité et audit npm à zéro
+
+Retrait convenu avec Claude dans `docs/DEPENDANCES.md` §3 : Next/Vinext et anciens points d'entrée inutilisés supprimés. Références des 16 tests historiques déplacées sans changement métier dans `tests/legacy-fixtures/`.
+
+Manifeste et verrou régénérés ensemble sans --force, installation propre réussie. Audit complet 27 → 0, hors développement 5 → 0. Wrangler 4.168.0 et Miniflare 5.20261123.1-beta conservés. Validation finale d'intégration documentée dans la livraison v1.4 suivante. Aucun déploiement.
+
 ## 2026-11-26 — Claude : mission corrective prioritaire après la contre-revue v1.3 de Work (PR n° 1)
 
 Demandée par le fondateur le 26 novembre. Détail, mesures et correspondance des tests : `docs/AUDIT-V2-CLAUDE.md`, section 12.

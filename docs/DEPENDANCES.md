@@ -67,3 +67,16 @@ Vérifié par lecture de tous les `import` de `backend/src`, `functions`, `ops`,
 
 - Construction et fonctionnement du gabarit après les montées de version de l’essai 2.
 - Audit après retrait du gabarit (dépend de la décision commune).
+
+## 7. Décision et réalisation Work — 26 novembre 2026
+
+Work accepte la proposition §3.3 et la répartition §4. L'examen des imports de `public/store`, `scripts/build-storefront.mjs`, `functions`, `backend`, `ops` et `studio` confirme que le gabarit ne sert plus la cible. Retrait de Next/React/Vinext/Vite, Drizzle, connecteurs et scripts hérités, configurations associées et ancien admin ; aucun paquet déplacé artificiellement en dev. Les trois modules historiques et deux migrations restent sous `tests/legacy-fixtures/` pour les 16 tests utiles, sans point d'entrée ni import déployé.
+
+`package.json` et `package-lock.json` régénérés ensemble par `npm install --package-lock-only --ignore-scripts --no-audit --no-fund`, puis installation propre `npm ci --ignore-scripts --no-audit --no-fund`. Aucun `--force`, aucune résolution manuelle du verrou. Wrangler **4.168.0**, Miniflare **5.20261123.1-beta** et la contrainte sharp de Claude sont conservés. Ce sont réellement des outils, sans dépendance npm dans le runtime actuellement livré.
+
+| Mesure indépendante | Avant | Après |
+| --- | ---: | ---: |
+| Audit complet | 27 (2 critiques, 8 élevées, 16 modérées, 1 faible) | **0** |
+| Audit hors développement | 5 (1 critique, 2 élevées, 2 modérées) | **0** |
+
+[Preuves JSON](qa/v14/README.md). Toutes les suites nominales et compilations Cloudflare/statique ont été rejouées ; 211 tests Node et 13 contrôles commerciaux passent. Le risque métier Resend restant n'est pas une vulnérabilité de dépendance et est documenté séparément. Voir [contre-audit](REVUE-V1-4-WORK.md). Les conclusions historiques des §2/6 restent datées ; le retrait est désormais réalisé. Relecture du commit dédié par Claude avant toute fusion.
