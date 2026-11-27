@@ -1,0 +1,2 @@
+ES256 : inscription, connexion signée, refus RP/origine/crossOrigin — workerd sans nodejs_compat : OK
+RS256 : inscription, connexion signée, refus RP/origine/crossOrigin — workerd sans nodejs_compat : OK

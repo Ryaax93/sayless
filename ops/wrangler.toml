@@ -1,0 +1,71 @@
+# Worker d'exploitation SAYLESS (environnement de test isolé par défaut).
+# Aucun secret ici : STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_SECRET, PII_KEY et
+# DISCORD_WEBHOOK_URL sont saisis par le fondateur dans Cloudflare (Workers > Paramètres > Variables).
+# database_id est remplacé lors de l'étape Cloudflare guidée ; rien n'est déployé automatiquement.
+name = "sayless-ops-staging"
+main = "worker.mjs"
+compatibility_date = "2026-05-15"
+workers_dev = true
+
+# Application SAYLESS STUDIO (construite par ops/build-studio.mjs dans dist-studio, non versionné).
+[assets]
+directory = "../dist-studio"
+run_worker_first = ["/api/*", "/webhooks/*", "/health"]
+
+[vars]
+ENVIRONMENT = "staging"
+PUBLIC_ORIGIN = "https://sayless-boutique.pages.dev"
+# STUDIO_ORIGIN et STUDIO_RP_ID : origine exacte de STUDIO (passkeys liées à ce domaine).
+# Par défaut : l'origine de la requête. En production : https://studio.saylessbrand.fr
+
+# Clé PUBLIQUE de sauvegarde (JWK RSA-OAEP), non secrète, fournie lors de l'étape « sauvegardes ».
+# BACKUP_PUBLIC_KEY = "{...}"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sayless-staging"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../backend/migrations"
+
+# Espace des sauvegardes chiffrées (Workers KV, offre gratuite) ; identifiant fourni à l'étape Cloudflare.
+[[kv_namespaces]]
+binding = "BACKUPS"
+id = "00000000000000000000000000000000"
+
+# ---------------------------------------------------------------------------------------------
+# Environnement de TEST isolé (offre gratuite, sans domaine) : `--env test`. Procédure pas à pas :
+# docs/CLOUDFLARE-TEST.md. Les identifiants de base et d'espace sont remplacés à l'étape 2
+# (ce ne sont pas des secrets). Les secrets sont envoyés par `wrangler secret bulk`, jamais ici.
+[env.test]
+name = "sayless-ops-test"
+workers_dev = true
+
+[env.test.assets]
+directory = "../dist-studio"
+run_worker_first = ["/api/*", "/webhooks/*", "/health"]
+
+[env.test.vars]
+ENVIRONMENT = "staging"
+# Adresse de la boutique de test (projet Pages), remplacée à l'étape 6 si le sous-domaine diffère.
+PUBLIC_ORIGIN = "https://sayless-boutique-test.pages.dev"
+# STUDIO_ORIGIN et STUDIO_RP_ID : adresse exacte du Worker de test, remplie à l'étape 4.
+# STUDIO_ORIGIN = "https://sayless-ops-test.<sous-domaine>.workers.dev"
+# STUDIO_RP_ID = "sayless-ops-test.<sous-domaine>.workers.dev"
+VAPID_SUBJECT = "https://saylessbrand.fr"
+# VAPID_PUBLIC_KEY et BACKUP_PUBLIC_KEY : valeurs publiques de public-values.txt (étape 3).
+
+[env.test.triggers]
+crons = ["* * * * *"]
+
+[[env.test.d1_databases]]
+binding = "DB"
+database_name = "sayless-test"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../backend/migrations"
+
+[[env.test.kv_namespaces]]
+binding = "BACKUPS"
+id = "00000000000000000000000000000000"

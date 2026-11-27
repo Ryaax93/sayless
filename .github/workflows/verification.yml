@@ -1,0 +1,73 @@
+# Vérification automatique sur Linux et Windows (GitHub Actions, gratuit pour un dépôt public).
+# Aucun secret, aucun déploiement, aucun accès en écriture : lecture du code, installation des
+# outils figés par package-lock.json, puis suites de tests et audit des dépendances.
+name: Vérification Linux et Windows
+
+on:
+  push:
+    branches: ['claude/**']
+  pull_request:
+    branches: [v2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Fins de ligne identiques à la procédure (LF)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Versions
+        run: |
+          node --version
+          npm --version
+      - name: Installation (package-lock.json)
+        run: npm ci
+      - name: Backend, STUDIO et concurrence
+        if: ${{ !cancelled() }}
+        run: npm run test:backend
+      - name: Boutique
+        if: ${{ !cancelled() }}
+        run: npm run --if-present test:frontend
+      - name: Prototype de stock
+        if: ${{ !cancelled() }}
+        run: npm run --if-present test:inventory
+      - name: Intégration boutique et backend
+        if: ${{ !cancelled() }}
+        run: npm run --if-present test:integration
+      - name: Revue de Work
+        if: ${{ !cancelled() }}
+        run: npm run --if-present test:review
+      - name: Revue v1.3 de Work
+        if: ${{ !cancelled() }}
+        run: npm run --if-present test:review:v13
+      - name: Compilation Cloudflare (sans déploiement)
+        if: ${{ !cancelled() }}
+        run: npm run check:cloudflare
+      - name: Audit des dépendances livrées (informatif)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: npm audit --omit=dev
+      - name: Audit complet (informatif)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: npm audit

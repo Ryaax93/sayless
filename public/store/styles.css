@@ -157,3 +157,34 @@ body.menu-open{overflow:hidden}
 .product-info .drop-complete{padding:28px;margin-bottom:24px}
 .product-info .drop-complete h2{font-size:2rem}
 @media(max-width:760px){.drop-complete{padding:42px 24px}}
+
+/* Raccordement v1.2 : mêmes couleurs, polices et proportions que la boutique validée. */
+.checkout-action{margin-top:24px}
+.checkout-block p{margin:14px 0;max-width:40rem}
+.checkout-block .shipping-options{margin-top:26px}
+.checkout-error{border-left:3px solid #a32d57;overflow-wrap:anywhere}
+.checkout-error p{margin-top:12px}
+.terms-choice{display:flex;align-items:flex-start;gap:12px;margin:24px 0;font-size:.9375rem;line-height:1.7}
+.terms-choice input{width:20px;height:20px;flex:none;margin-top:3px;accent-color:var(--ink)}
+.terms-choice a{text-decoration:underline;text-underline-offset:3px}
+#checkout-pay{width:100%;margin-top:16px}
+#checkout-challenge{max-width:100%;min-width:0;overflow:hidden}
+#checkout-readiness,#challenge-status{margin-top:12px}
+.relay-results{margin-top:22px;max-height:440px;overflow:auto;scrollbar-gutter:stable}
+.relay-summary{padding:18px 0;border-bottom:1px solid var(--line);font-size:.9375rem;overflow-wrap:anywhere}
+.order-reference{margin-top:24px;overflow-wrap:anywhere}
+.tracking-page{max-width:800px;margin:auto}.tracking-page form{margin:32px 0}.tracking-page #tracking-result{margin-top:18px}
+.drop-paused{border-top:1px solid var(--line)}.drop-paused h2{overflow-wrap:anywhere}
+.summary-card .text-link{margin:16px 0}
+@media(max-width:760px){.terms-choice{font-size:1rem}.checkout-error,.checkout-page .small-text{font-size:.875rem}.checkout-steps{gap:12px}.checkout-block input{font-size:16px}.relay-results{max-height:none}.tracking-page h1{overflow-wrap:anywhere}}
+
+/* Suivi et demandes : mêmes cartes et rythme éditorial que le parcours d'achat. */
+.tracking-card{max-width:720px;margin:32px 0}.tracking-steps{list-style:none;padding:0;margin:24px 0}.tracking-steps li{border-top:1px solid var(--line,#d8d3cc);padding:16px 0;display:flex;gap:12px;justify-content:space-between}.tracking-steps span{font-size:14px}.tracking-page form{max-width:580px}.tracking-page>.text-link{display:inline-block;margin-top:24px}[data-customer-request] .text-link{display:inline-block;padding:14px 0;margin-right:24px}[data-customer-request] [data-request-security]{margin-bottom:16px}[data-form-result]{overflow-wrap:anywhere}[data-customer-request] input,[data-customer-request] textarea{font-size:16px}
+
+/* Document contractuel exact : texte clair, retours et espaces conservés. */
+.terms-document { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.75; text-align: left; }
+.checkout-terms { margin: 1.5rem 0; padding: 1rem; background: #faf8f7; color: #171717; border-radius: 2px; }
+.checkout-terms summary { cursor: pointer; padding: .5rem 0; font-weight: 600; }
+.checkout-terms .terms-document { max-height: 24rem; overflow-y: auto; margin: 1rem 0; padding-right: .5rem; font-size: .95rem; }
+.checkout-terms a { display: inline-block; padding: .65rem 0; text-decoration: underline; }
+.checkout-terms :focus-visible { outline: 2px solid #171717; outline-offset: 3px; }

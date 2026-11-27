@@ -1,52 +1,47 @@
-# Relais à Claude — SAYLESS 2.0
+# Passation Work → Claude — API v1.4
 
-Tu peux maintenant auditer la boutique complète dans la branche `v2` de `Ryaax93/sayless`. Pars de cette branche et crée `claude/audit-v2` (ou une autre `claude/…`). Ne touche ni à main, ni au domaine, ni aux paiements réels, ni à la publication.
+26 novembre 2026. PR nº 2, `work/frontend-api-v1-2`, préparée depuis `f6332555b44f8c3441a29d804d8bb013b2800522` contenant votre `7102f43`. Aucune fusion vers `v2`. [Contre-audit détaillé](REVUE-V1-4-WORK.md).
 
-Le rapport « SAYLESS — Audit & plan d’automatisation », dernière version du 24 novembre (693 lignes, sections 1 à 15), a été lu intégralement, notamment les sections 6, 11, 12 et 13. Il portait sur la 1.0. Ses constats ne doivent pas être reportés automatiquement sur la 2.0 : les pages légales, le panier, le guide, les images externes, le logo et la barre continue existent déjà. Les textes légaux validés sont à préserver ; les informations manquantes sont listées séparément.
+## Acquis vérifiés
 
-## Première prise en main
+B1 transactionnel, B2 archive obligatoire et C1 document exact : vérifiés dans les chemins de code, avec injection de pannes et restauration. 211 tests Node + 13 contrôles commerciaux passent ; un test de risque distinct reste rouge. La boutique transmet `terms_version` et `terms_sha256` pour les nouvelles tentatives, vérifie le corps avec Web Crypto, l'affiche sans HTML et conserve les reprises antérieures.
 
-```sh
-git clone --branch v2 --single-branch https://github.com/Ryaax93/sayless.git
-cd sayless
-git switch -c claude/audit-v2
-npm run dev:storefront
-npm ci --ignore-scripts --no-audit --no-fund
-npm test
-npm run build:storefront
-```
+Nettoyage réalisé selon votre accord `DEPENDANCES.md` §3 : retrait Next/Vinext et anciens points d'entrée ; fixtures historiques conservées. Wrangler 4.168.0 et Miniflare 5.20261123.1-beta inchangés. Audit complet et production : zéro. Relire le commit dédié package/verrou avant fusion ; en cas de conflit, régénérer le verrou depuis le manifeste réconcilié. Ne pas réintroduire l'ancien gabarit.
 
-Sans backend, le stock est volontairement inconnu et les API répondent 503. Aucune donnée de production ni clé n’est requise pour ces tests.
+Seul changement dans vos tests : la fixture `tests/backend/parity.test.mjs` reçoit le hash du devis pour passer dans le client v1.4. Aucun code métier, migration, STUDIO ou assistant modifié par Work.
 
-## À reprendre en priorité
+## Corrections et décisions à prendre
 
-1. Confirmer/amender `docs/API-CONTRACT.md` avant d’implémenter les réponses serveur : états vérifiés, réservations, devis, idempotence, suivi et demandes. Le contrat est proposé, pas présenté comme déjà accepté par toi.
-2. Auditer le prototype dans `server/`, `drizzle/` et ses 16 tests ; décider explicitement ce qui est réutilisé. Ne pas maintenir deux stocks ni deux espaces admin. Remplacer l’authentification spécifique de l’ancien aperçu.
-3. Créer le catalogue D1 extensible et la correspondance des SKU. `data/products.json` contient les faits approuvés, sans stock ; 26 reste théorique. Aucun peuplement réel avant inventaire physique S/M/L.
-4. Préparer les Workers et migrations, Stripe test signé, réservations atomiques, déduplication, expirations, rapprochement et journal. Aucun paiement réel.
-5. Livrer des API testables pour vrais points relais, commandes, suivi, demandes et retours, puis SAYLESS STUDIO. Garder prix et frais de port approuvés.
-6. Proposer une PR vers `v2` avec documentation, tests, limites et décisions à soumettre au fondateur. Work branchera les interfaces après coordination.
+1. **V14-R1, prioritaire avant recette e-mail fiable** : `npm run test:review:risks` reproduit deux envois après réponse Resend perdue et reprise >24 h. Conserver `first_attempt_at` avant l'appel, clé et contenu figés, reçu fournisseur ; délai maximal de reprise inférieur à la fenêtre garantie ; état incertain et rapprochement au-delà. Préserver la reprise des intentions non encore envoyées. Tester aussi crash après succès avant UPDATE, expiration du bail, concurrence, modification de l'expéditeur et restauration d'une ancienne sauvegarde. L'idempotence du fournisseur ne dure pas indéfiniment.
+2. **API v1.5 proposée** : rendre `terms_sha256` obligatoire pour toute nouvelle réservation. Vérifier d'abord la clé existante et le fingerprint original, puis exiger hash/version/quote/archive courants pour une nouvelle commande. Ne pas injecter un hash a posteriori dans le fingerprint des anciennes tentatives sans hash. Critères : absence refusée sans mutation ; faux hash refusé ; reprise ancienne identique autorisée ; même clé avec contenu changé refusée. Work est prêt ; modifier le contrat et tests ensemble avant ouverture.
+3. **Assistant TEST** : faire remonter le booléen de `report(url)` dans `install()` et tester un contrôle de santé négatif. En attendant, la procédure PowerShell Work exécute `etat` séparément, code non nul bloquant. L'assistant sans argument et `reglage` déploient : conserver un accord explicite du fondateur.
+4. **CI partagée** : ajouter `npm run test:review:v14`, build boutique TEST fermé, et rendre l'audit npm bloquant maintenant qu'il est à zéro. Conserver le risque R1 explicitement suivi ; après correction, intégrer son test dans une suite obligatoire. Le workflow Claude n'a pas été modifié unilatéralement.
+5. **SimpleWebAuthn** : accord technique Work sur 14.1.0 et votre adaptateur ; Node et workerd sans nodejs_compat confirmés. Ne pas enlever le garde cross-origin/topOrigin. Garder toutes les politiques sessions/récupération/UP/UV/signatures/reauth. Validation du fondateur avant bascule ; essai iPhone et CPU hébergé ensuite. Aucun remplacement réalisé ici.
+6. **Recette externe** : Cloudflare fermé, puis secrets TEST et services séparément, inventaire de recette clairement identifié. Confirmation de l'inventaire réel via STUDIO après contrôle des ventes V1. Aucun changement du lien V1. Boxtal suspendu à la réponse au ticket 2277409.
 
-## Points de vigilance
+## Discord : un seul webhook actuellement
 
-- Le navigateur n’est jamais une preuve de prix, de stock, de total ou de paiement. Ne pas confirmer une commande à partir du seul retour Stripe ou `session_id`.
-- Une quantité disponible de zéro peut provenir de réservations. Le message SOLD OUT exige un état confirmé distinct.
-- Le compte Instagram transmis dans le dernier brief est `@sayless.brand`. L’adresse de contact actuelle reste `SayLe2s@outlook.com` ; aucun `contact@` non configuré n’est affiché.
-- Une prévisualisation est un environnement séparé : ne pas activer d’autodeploy Git/Pages/Workers sans accord.
-- Les fichiers `server/*`, les migrations et l’ancien `admin.js` sont conservés pour audit ; ils ne sont pas étendus par Work.
-- `docs/DESIGN-SYSTEM.md` fournit couleurs, polices, logo et principes pour ton Studio. Aucun nouvel admin n’a été créé.
-- Le rapport complet n’est pas dans ce dépôt public parce qu’il contient des données financières et de compte.
+`configuredChannels` et `discordSender` utilisent `DISCORD_WEBHOOK_URL`. Cela permet une destination Discord, pas quatorze. Proposition à implémenter par Claude sans nouveau service : un secret Worker par salon utile, une table de routage fixe `kind → destination`, sans URL ni canal fournis par le navigateur. Résolution et validation des URLs exclusivement côté serveur ; ne jamais journaliser les tokens. Garder le webhook actuel comme secours `alertes` seulement si explicitement configuré.
 
-## Questions techniques à résoudre ensemble
+| Salon | Événements autorisés proposés |
+| --- | --- |
+| rapport-quotidien | Agrégats journaliers |
+| finances | Totaux agrégés, anomalies de rapprochement sans identité client |
+| à-faire | Compteurs de tâches manuelles |
+| commandes | Nouvelle commande : référence interne opaque, taille, montant, état |
+| expéditions | Compteurs et état de préparation ; aucun lien porteur de jeton ni adresse |
+| retours | Compteurs et état des dossiers ; aucun motif libre du client |
+| stock | Seuil, taille épuisée, fin de drop |
+| alertes | Échec technique, envoi incertain, file bloquée |
+| sécurité | Événement technique minimisé, sans IP, e-mail, token ou identifiant d'appareil |
+| état-du-site | Santé et disponibilité |
+| sauvegardes | Résultat, date et contrôle d'intégrité ; ni contenu ni clé ni lien de téléchargement |
+| direction-artistique, contenus, futurs-drops | Salons manuels ; aucune automatisation nécessaire au DROP 01 |
 
-- Quelle forme finale de contrat stock : la carte simple initiale ne distingue pas panne, réservation et épuisement définitif.
-- Comment attacher les coordonnées saisies avant la livraison à un devis et à une session Stripe sans les conserver inutilement en D1.
-- Comment obtenir un total serveur exact avant le bouton Payer, et conserver son mode de livraison dans Stripe.
-- Comment exposer les API sous la même origine que la boutique, avec protections CSRF, limitation d’abus et réponses non cacheables.
-- Comment traiter les ventes hors de la 2.0 et la fermeture du lien Stripe de la 1.0 lors de la bascule autorisée.
+Persister une destination logique dans chaque envoi et dédupliquer par `(événement, destination)` ; bornes du budget partagé, gestion 429/Retry-After, pas de mentions (`allowed_mentions: {parse: []}`). Tests : routage exact, salon absent, erreur d'une destination isolée, reprise, aucune donnée personnelle même dans les erreurs. Discord n'offre pas la même garantie d'idempotence que Resend : ne pas promettre zéro doublon réseau. Ne copier aucun secret Discord vers Pages.
 
-## Compléments du dernier rapport
+## Éléments fondateur enregistrés
 
-La section 12 propose maintenant une passkey pour Studio, avec Access en couche facultative : choix du fondateur et conception serveur à confirmer par Claude. La section 13 et ses 23 scénarios sont des résultats déclarés par Claude ; ils ne sont pas les 16 tests du prototype inclus ici et n’ont pas été rejoués sur infrastructure réelle par Work. Turnstile est prévu au contrat avant réservation et demandes ; aucun widget ni clé n’est activé.
+Comptage du 26 novembre 2026 : S8/M14/L5 =27, aucune pièce endommagée. Hypothèse sample offert non confirmée ; ne pas réécrire l'historique ni initialiser la production automatiquement. Poids emballés environ 711/821/872 g, sachet 55×45 cm, épaisseur 10 cm pour simulation seulement. Prix 75 €, relais 4,90 €, domicile 8,50 €, transporteur non validé. Voir `INFORMATIONS-A-COMPLETER.md`.
 
-Les couleurs #070707 / #ff7eb9 et Bebas Neue / Space Mono de la section 12 décrivent la 1.0. Pour harmoniser Studio avec la 2.0 validée, utiliser les valeurs et polices réellement présentes dans DESIGN-SYSTEM.md, sans refaire la boutique. La future adresse contact@saylessbrand.fr n’est à afficher qu’après vérification de réception/envoi. DNS, ancien lien Stripe, passkeys, Gmail et notifications ne sont pas modifiés par cet export.
+[Procédure PowerShell](POWERSHELL-TEST-V1-4.md) · [Frontend TEST](CLOUDFLARE-TEST-FRONTEND.md) · [Responsabilités](OWNERSHIP.md) · [Design system](DESIGN-SYSTEM.md)

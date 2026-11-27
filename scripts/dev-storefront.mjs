@@ -15,8 +15,8 @@ const server=createServer(async(req,res)=>{
   if(url.pathname.startsWith('/api/')) {res.writeHead(503,{...headers,'Content-Type':'application/json'});res.end(JSON.stringify({error:'backend_not_connected'}));return;}
   if(!['GET','HEAD'].includes(req.method)){res.writeHead(405,headers);res.end();return;}
   const pathname=decodeURIComponent(url.pathname);
-  if(pathname.split('/').some(x=>x.startsWith('.')||x.includes('\\')||x.includes('\0'))){res.writeHead(404,headers);res.end();return;}
-  let candidate=path.resolve(root,'.'+(pathname==='/'?'/store/index.html':pathname));
+  if(path.posix.normalize(pathname)==='/store/admin.js'||pathname.split('/').some(x=>x.startsWith('.')||x.includes('\\')||x.includes('\0'))){res.writeHead(404,headers);res.end();return;}
+  let candidate=path.resolve(root,'.'+(['/','/merci','/commande-annulee','/suivi'].includes(pathname)?'/store/index.html':pathname));
   if(!candidate.startsWith(root)){res.writeHead(404,headers);res.end();return;}
   candidate=await realpath(candidate);
   if(!candidate.startsWith(root)||!(await stat(candidate)).isFile()){res.writeHead(404,headers);res.end();return;}
