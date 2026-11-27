@@ -30,7 +30,10 @@ const WRANGLER = process.env.SAYLESS_WRANGLER ?? join(ROOT, 'node_modules', 'wra
 const WORKER = 'sayless-ops-test';
 const DATABASE = 'sayless-test';
 const NAMESPACE = 'sayless-test-backups';
-const SECRET_NAMES = ['DISCORD_WEBHOOK_URL', 'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'TURNSTILE_SECRET'];
+// Discord : webhook unique (DISCORD_WEBHOOK_URL) et/ou un webhook par salon (docs/DISCORD.md).
+const DISCORD_SALONS = ['COMMANDES', 'EXPEDITIONS', 'RETOURS', 'STOCK', 'FINANCES', 'RAPPORT', 'ALERTES', 'SECURITE', 'SITE', 'SAUVEGARDES'];
+const SECRET_NAMES = ['DISCORD_WEBHOOK_URL', ...DISCORD_SALONS.map((s) => `DISCORD_WEBHOOK_${s}`),
+  'RESEND_API_KEY', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'TURNSTILE_SECRET'];
 const SETTING_NAMES = ['EMAIL_FROM', 'EMAIL_REPLY_TO'];
 
 class Stop extends Error {}
@@ -299,6 +302,7 @@ async function main() {
     if (!SECRET_NAMES.includes(name)) stop(`Secrets possibles : ${SECRET_NAMES.join(', ')}`);
     say(`Colle la valeur de ${name} quand Wrangler la demande : elle ne s’affiche pas et part directement chez Cloudflare.`);
     if (name.startsWith('STRIPE_')) say('Mode TEST uniquement (clé sk_test_ ou rk_test_) : une clé réelle est refusée par l’environnement de test.');
+    if (name.startsWith('DISCORD_')) say('Adresse complète du webhook (https://discord.com/api/webhooks/…). Une adresse d’un autre site est ignorée par le serveur.');
     const r = wrangler(['secret', 'put', name, '-c', CONFIG], { interactive: true });
     if (r.code !== 0) stop('Secret non enregistré.');
     return say(`${name} enregistré. Contrôle : node scripts/test-env.mjs etat`);

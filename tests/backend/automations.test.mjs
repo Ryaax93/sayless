@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bench, PII, startDatabases, stopDatabases } from './helpers.mjs';
-import { maybeDailyReport } from '../../backend/src/notify.mjs';
+import { deliverOutbox, maybeDailyReport } from '../../backend/src/notify.mjs';
 import { handleOps, runScheduled } from '../../backend/src/routes.mjs';
 
 before(startDatabases);
@@ -211,3 +211,68 @@ test('T05 assistant de TEST : jamais de succès annoncé si le contrôle final �
   }
 });
 
+
+test('T06 Discord par salon : routage côté serveur, webhook unique en secours, Retry-After respecté, salon en panne isolé, aucune donnée client', async () => {
+  const hook = (n) => `https://discord.com/api/webhooks/10000000000000000${n}/jeton-de-test-${n}-abcdefghijklmnopqrstuvwxyz`;
+  const setup = async (webhooks) => {
+    const b = await bench({ 'TEST-S': 1, 'TEST-M': 1 }, { threshold: 1 });
+    Object.assign(b.env, { RESEND_API_KEY: 're_test_uniquement', EMAIL_FROM: 'SAYLESS <commandes@example.invalid>', ...webhooks });
+    b.posts = [];
+    b.answer = () => new Response(null, { status: 204 });
+    b.deps.transport = async (url, init) => {
+      if (String(url).startsWith('https://api.resend.com/')) return new Response('{"id":"re_test"}', { status: 200 });
+      b.posts.push({ url: String(url), body: JSON.parse(init.body) });
+      return b.answer(String(url));
+    };
+    return b;
+  };
+  const traffic = async (b) => {
+    await b.buy('TEST-M', '10.240.0.1'); // nouvelle commande, taille épuisée
+    assert.equal((await b.api('POST', '/api/requests', { ip: '10.240.0.2', body: { type: 'return', name: PII.name, email: PII.email,
+      message: `Retour, mon adresse est ${PII.address.line1}`, turnstile: 'jeton-test' } })).status, 200);
+    await run(b, (ctx, deps) => deps.notify({ kind: 'technical', ref: 'essai', level: 'critical', title: 'Panne de test', body: 'Message technique de test.' }));
+    await run(b, (ctx, deps) => deps.notify({ kind: 'nouveau_type_imprevu', ref: 'essai', title: 'Type imprévu', body: 'Va dans alertes.' }));
+  };
+  const deliver = (b) => run(b, (ctx, deps) => deliverOutbox(ctx, deps.senders, deps));
+  const routes = async (b) => Object.fromEntries((await b.rows("SELECT dedupe, route FROM outbox WHERE channel = 'discord' ORDER BY id")).map((r) => [r.dedupe.split(':')[1], r.route]));
+
+  // Salons dédiés seulement : chaque événement dans son salon ; sans webhook ni secours, rien n'est mis en file.
+  const a = await setup({ DISCORD_WEBHOOK_COMMANDES: hook(1), DISCORD_WEBHOOK_STOCK: hook(2), DISCORD_WEBHOOK_ALERTES: hook(3),
+    DISCORD_WEBHOOK_RETOURS: 'https://exemple.invalid/api/webhooks/1/faux' });
+  await traffic(a);
+  const queued = await routes(a);
+  assert.deepEqual([queued.order_paid, queued.size_sold_out, queued.technical, queued.nouveau_type_imprevu], ['commandes', 'stock', 'alertes', 'alertes']);
+  assert.equal(queued.request_return, undefined, 'adresse hors Discord ignorée : salon retours sans destination');
+  await deliver(a);
+  const by = (url) => a.posts.filter((p) => p.url === url).map((p) => p.body.embeds[0].title);
+  assert.ok(by(hook(1)).some((t) => /Nouvelle commande/.test(t)) && by(hook(2)).some((t) => /épuisée|SOLD OUT/i.test(t)) && by(hook(3)).includes('Panne de test'));
+  assert.ok(a.posts.every((p) => p.url.startsWith('https://discord.com/api/webhooks/')), 'aucun autre hôte appelé');
+  for (const p of a.posts) {
+    assert.deepEqual(p.body.allowed_mentions, { parse: [] }, 'aucune mention possible');
+    for (const value of [PII.name, PII.email, PII.phone, PII.address.line1, PII.address.city]) assert.ok(!JSON.stringify(p.body).includes(value), `aucune donnée client (${value})`);
+  }
+
+  // Webhook unique seulement : comportement d'avant, tous les salons au même endroit.
+  const s = await setup({ DISCORD_WEBHOOK_URL: hook(9) });
+  await traffic(s);
+  await deliver(s);
+  assert.ok(s.posts.length >= 4 && s.posts.every((p) => p.url === hook(9)));
+  assert.equal((await routes(s)).request_return, 'retours', 'destination logique gardée');
+
+  // Salon dédié + secours ; Retry-After respecté sans abandon ; salon en panne sans effet sur les autres.
+  const m = await setup({ DISCORD_WEBHOOK_URL: hook(9), DISCORD_WEBHOOK_COMMANDES: hook(1) });
+  await traffic(m);
+  m.answer = (url) => (url === hook(1) ? new Response(null, { status: 429, headers: { 'Retry-After': '30' } })
+    : url === hook(9) ? new Response(null, { status: 500 }) : new Response(null, { status: 204 }));
+  for (let i = 0; i < 6; i += 1) { await deliver(m); m.clock.t += 31; }
+  const paid = await m.real.prepare("SELECT status, attempts, last_error FROM outbox WHERE dedupe LIKE 'discord:order_paid:%'").first();
+  assert.deepEqual([paid.status, paid.attempts, paid.last_error], ['pending', 0, 'discord_429'], 'limite de débit : attendre, jamais abandonner');
+  m.answer = () => new Response(null, { status: 204 });
+  m.clock.t += 3600;
+  await deliver(m);
+  assert.equal(await m.count("SELECT COUNT(*) FROM outbox WHERE channel = 'discord' AND status <> 'sent'"), 0, 'tout part au retour de Discord');
+  // Santé : salons et destinations, jamais les adresses.
+  const health = await (await import('../../backend/src/notify.mjs')).discordRouting(m.env);
+  assert.deepEqual(health.find((r) => r.route === 'commandes'), { route: 'commandes', target: 'dedicated' });
+  assert.deepEqual(health.find((r) => r.route === 'stock'), { route: 'stock', target: 'shared' });
+});

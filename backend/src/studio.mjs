@@ -9,7 +9,7 @@ import { stripeMode, stripeReady } from './stripe.mjs';
 import { currentTerms, publishTerms, termsDocument } from './terms.mjs';
 import { exportRecettes, csvSafe, inspectReturn, viewContact } from './operations.mjs';
 import { legacyReviewText, recordLegacyLinkSale } from './payments.mjs';
-import { configuredChannels, deliverOutbox, emailLabel, reconcileEmail } from './notify.mjs';
+import { configuredChannels, deliverOutbox, discordRouting, emailLabel, reconcileEmail } from './notify.mjs';
 import { emailReady } from './email.mjs';
 import { intentStatement, pendingIntents, processMailIntents } from './intents.mjs';
 import { pushReady, validSubscription } from './push.mjs';
@@ -213,6 +213,19 @@ function backupCheck({ error, verified, now, configured, kept }) {
 
 async function readJsonBody(request, size) {
   return readJson(request, size);
+}
+
+// Salons Discord : destinations effectives, jamais les adresses des webhooks.
+function discordCheck(ctx) {
+  const routes = discordRouting(ctx);
+  const names = { commandes: 'commandes', expeditions: 'expéditions', retours: 'retours', stock: 'stock', finances: 'finances', rapport: 'rapport quotidien',
+    alertes: 'alertes', securite: 'sécurité', site: 'état du site', sauvegardes: 'sauvegardes' };
+  const of = (target) => routes.filter((r) => r.target === target).map((r) => names[r.route]);
+  const [own, shared, none] = [of('dedicated'), of('shared'), of('none')];
+  if (!own.length && !shared.length) return { name: 'Notifications Discord', state: 'todo', detail: 'Webhooks des salons privés à saisir' };
+  return { name: 'Notifications Discord', state: 'ok', detail: [own.length ? `Salons dédiés : ${own.join(', ')}` : null,
+    shared.length ? `${own.length ? 'Autres salons' : 'Tous les salons'} par le webhook unique` : null,
+    none.length ? `Sans destination Discord : ${none.join(', ')}` : null].filter(Boolean).join(' ; ') };
 }
 
 export async function handleStudio(request, ctx, { route, url, session, settings, requireStepUp, deps, now, config }) {
@@ -421,7 +434,7 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         { name: 'Base de données', state: problems.length ? 'alert' : 'ok', detail: problems.length ? `${problems.length} écart(s) de stock : ${problems[0]}` : 'Joignable ; stock égal au registre' },
         { name: 'Tâches automatiques', state: cron && now - cron < 300 ? 'ok' : 'alert', detail: cron ? `Dernier passage il y a ${Math.round((now - cron) / 60)} min` : 'Aucun passage enregistré' },
         { name: 'Paiement Stripe', state: stripeReady(ctx) ? 'ok' : 'todo', detail: stripeReady(ctx) ? `Mode ${stripeMode(ctx) === 'live' ? 'réel' : 'test'}${lastEvent ? `, dernier événement ${iso(lastEvent).slice(0, 16).replace('T', ' ')} UTC` : ', aucun événement reçu'}` : 'Clés à saisir' },
-        { name: 'Notifications Discord', state: configuredChannels(ctx).includes('discord') ? 'ok' : 'todo', detail: configuredChannels(ctx).includes('discord') ? 'Webhook configuré' : 'Webhook de salon privé à saisir' },
+        discordCheck(ctx),
         { name: 'Notifications iPhone', state: pushReady(ctx) ? 'ok' : 'todo', detail: pushReady(ctx) ? 'Clés configurées' : 'Clés VAPID à saisir' },
         { name: 'E-mails clients', state: emailReady(ctx) ? 'ok' : 'todo', detail: emailReady(ctx) ? `Expéditeur ${ctx.EMAIL_FROM}` : 'Resend et domaine vérifié à configurer' },
         { name: 'File d’envoi', state: dead || stuck || uncertain.length ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)` : `${queued} message(s) en attente`,

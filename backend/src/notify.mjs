@@ -12,6 +12,39 @@ const euros = (cents) => `${(cents / 100).toFixed(2).replace('.', ',')} €`;
 // Canaux : ceux configurés ici, plus ceux que le Worker d'exploitation a déclarés dans la base
 // (settings.notify_channels) : une alerte née dans la boutique part aussi sur Discord et l'iPhone
 // sans copier leurs secrets dans le projet de la boutique.
+// Salons Discord du serveur privé SAYLESS : un webhook par salon (secret du Worker), choisi côté
+// serveur d'après le type d'événement, jamais d'après une donnée reçue du navigateur. Un salon sans
+// webhook dédié reçoit ses messages par le webhook unique DISCORD_WEBHOOK_URL s'il existe (mode
+// d'avant, toujours valable) ; sinon ses messages restent dans STUDIO et sur l'iPhone. Les textes
+// ne portent que des références, montants agrégés et états : aucune donnée de client.
+export const DISCORD_ROUTES = Object.freeze({
+  commandes: ['order_paid', 'legacy_link_sale', 'legacy_link_review', 'address_out_of_zone', 'request_contact'],
+  expeditions: ['parcel_shipped', 'parcel_at_relay', 'parcel_picked_up', 'parcel_delivered', 'parcel_not_collected'],
+  retours: ['parcel_returned', 'request_return', 'request_withdrawal', 'refund'],
+  stock: ['low_stock', 'size_sold_out', 'drop_sold_out', 'paid_without_stock', 'legacy_link_without_stock'],
+  finances: ['payment_mismatch', 'payment_failed', 'dispute', 'unknown_refund', 'unknown_session'],
+  rapport: ['daily_report'],
+  alertes: ['technical', 'mail_intent_stuck', 'email_uncertain', 'contact_not_sealed', 'terms_integrity'],
+  securite: ['studio_passkey_added', 'studio_recovery_used', 'studio_counter_regressed', 'studio_codes_regenerated'],
+  site: ['shop_opened', 'shop_paused'],
+  sauvegardes: ['backup_failed', 'backup_not_configured'],
+});
+const ROUTE_OF = new Map(Object.entries(DISCORD_ROUTES).flatMap(([route, kinds]) => kinds.map((kind) => [kind, route])));
+export const discordRoute = (kind) => ROUTE_OF.get(kind) ?? 'alertes'; // type nouveau ou imprévu : alertes
+export const discordSecretName = (route) => `DISCORD_WEBHOOK_${route.toUpperCase()}`;
+// Adresse de webhook Discord seulement (aucun autre hôte joignable par ce biais).
+export const validWebhook = (url) => typeof url === 'string' && /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+$/.test(url);
+export function discordUrl(env, route) {
+  const own = env[discordSecretName(route)];
+  if (validWebhook(own)) return own;
+  return validWebhook(env.DISCORD_WEBHOOK_URL) ? env.DISCORD_WEBHOOK_URL : null;
+}
+export const discordConfigured = (env) => validWebhook(env.DISCORD_WEBHOOK_URL)
+  || Object.keys(DISCORD_ROUTES).some((route) => validWebhook(env[discordSecretName(route)]));
+// Salons et destination effective, sans aucune adresse (écran Santé de STUDIO).
+export const discordRouting = (env) => Object.keys(DISCORD_ROUTES).map((route) => ({ route,
+  target: validWebhook(env[discordSecretName(route)]) ? 'dedicated' : validWebhook(env.DISCORD_WEBHOOK_URL) ? 'shared' : 'none' }));
+
 export function createNotifier(env, deps) {
   return async function notify({ kind, ref, level = 'info', title, body }) {
     const { db } = env;
@@ -21,9 +54,12 @@ export function createNotifier(env, deps) {
     const payload = JSON.stringify({ kind, level, title, body });
     const declared = String((await one(db, `SELECT value FROM settings WHERE key = 'notify_channels'`).catch(() => null))?.value ?? '')
       .split(',').filter((c) => ['discord', 'push'].includes(c));
+    const route = discordRoute(kind);
     for (const channel of new Set([...(deps.channels ?? []), ...declared])) {
-      statements.push(sql(db, `INSERT INTO outbox (channel, dedupe, payload, at) VALUES (?, ?, ?, ?)
-        ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now));
+      // Discord configuré, mais ni salon dédié ni webhook unique pour cet événement : rien à envoyer.
+      if (channel === 'discord' && discordConfigured(env) && !discordUrl(env, route)) continue;
+      statements.push(sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now, channel === 'discord' ? route : null));
     }
     await batch(db, statements);
   };
@@ -31,7 +67,7 @@ export function createNotifier(env, deps) {
 
 export function configuredChannels(env) {
   const channels = [];
-  if (/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(env.DISCORD_WEBHOOK_URL ?? '')) channels.push('discord');
+  if (discordConfigured(env)) channels.push('discord');
   if (pushReady(env)) channels.push('push');
   return channels;
 }
@@ -157,9 +193,11 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
         await parkUncertain(db, deps, { ...row, status: 'sending', attempts }, uncertain, 'essais_epuises');
         continue;
       }
-      const dead = uncertain === null && attempts >= maxAttempts; // échec certain : rien n'est parti
-      await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ?, uncertain_since = ?, last_error = ? WHERE id = ?`,
-        dead ? 'dead' : 'pending', now + Math.min(60 * 2 ** attempts, 3600), uncertain, code, row.id)]);
+      // Échec certain : rien n'est parti. Demande d'attente (429) : ni abandon ni échec compté.
+      const wait = Number.isInteger(error?.retryAfter) ? error.retryAfter : null;
+      const dead = uncertain === null && wait === null && attempts >= maxAttempts;
+      await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ?, uncertain_since = ?, last_error = ?, attempts = attempts - ? WHERE id = ?`,
+        dead ? 'dead' : 'pending', now + (wait ?? Math.min(60 * 2 ** attempts, 3600)), uncertain, code, wait === null ? 0 : 1, row.id)]);
       if (dead) {
         await deps.notify({ kind: 'technical', ref: `outbox:${row.id}`, level: 'critical',
           title: 'Notification non distribuée', body: `Canal ${row.channel} : échec après ${maxAttempts} essais.` });
@@ -189,8 +227,14 @@ export async function markRestoredEmails(db, createdAt) {
 }
 
 // Discord : webhook entrant (gratuit, aucun bot). Aucune mention possible (@everyone neutralisé).
-export function discordSender(url, transport = fetch) {
-  return async (message) => {
+// Salon choisi à l'envoi d'après la destination logique enregistrée dans la file (route) : un
+// webhook ajouté ou corrigé entre-temps sert aussi aux messages déjà en attente.
+// 429 : Discord demande d'attendre (Retry-After) ; le message repart ensuite, sans compter comme échec.
+// Discord n'a pas de clé d'idempotence : une réponse perdue peut, rarement, doubler un message.
+export function discordSender(env, transport = fetch) {
+  return async (message, row = {}) => {
+    const url = discordUrl(env, row.route ?? discordRoute(message.kind));
+    if (!url) throw new Error('salon_discord_absent');
     const colors = { info: 0xf0a6bf, warning: 0xf0c674, critical: 0xd9534f };
     const response = await transport(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(5000),
@@ -198,6 +242,10 @@ export function discordSender(url, transport = fetch) {
         embeds: [{ title: String(message.title).slice(0, 250), description: String(message.body).slice(0, 2000),
           color: colors[message.level] ?? colors.info }] }),
     });
+    if (response.status === 429) {
+      const wait = Number(response.headers.get('Retry-After'));
+      throw Object.assign(new Error('discord_429'), { retryAfter: Number.isFinite(wait) && wait > 0 ? Math.min(Math.ceil(wait), 3600) : 60 });
+    }
     if (!response.ok) throw new Error(`discord_${response.status}`);
   };
 }

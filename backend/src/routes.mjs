@@ -42,7 +42,7 @@ export function createContext(env, overrides = {}) {
 // Canaux d'envoi réellement configurés (secrets saisis dans Cloudflare) ; aucun autre.
 export function sendersFor(env, transport = fetch) {
   const senders = {};
-  if (configuredChannels(env).includes('discord')) senders.discord = discordSender(env.DISCORD_WEBHOOK_URL, transport);
+  if (configuredChannels(env).includes('discord')) senders.discord = discordSender(env, transport);
   if (configuredChannels(env).includes('push')) senders.push = pushSender(env, transport);
   if (emailReady(env)) senders.email = resendSender(env, transport);
   return senders;
