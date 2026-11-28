@@ -1,0 +1,167 @@
+{
+  "commit_audited": "d05cf655668a4ea6d2191f5859aa78c1d4f6cf5d",
+  "date": "2026-11-28",
+  "environment": {
+    "os": "Linux",
+    "node": "24.22.3",
+    "npm": "11.19.1"
+  },
+  "verdict": "GO pour recette Cloudflare TEST surveillée ; réserve P3-R1 sur les diagnostics concurrents ; aucun déploiement effectué",
+  "existing_tests": {
+    "passed": 297,
+    "failed": 0
+  },
+  "commercial_checks": {
+    "passed": 13,
+    "failed": 0
+  },
+  "new_tests": {
+    "passed": 3,
+    "failed": 2,
+    "failed_cases": [
+      "P3-R1a",
+      "P3-R1b"
+    ]
+  },
+  "all_tests": {
+    "passed": 300,
+    "failed": 2,
+    "excludes": "13 contrôles commerciaux séparés"
+  },
+  "npm_audit": {
+    "all": 0,
+    "omit_dev": 0
+  },
+  "command_environment": {
+    "WRANGLER_SEND_METRICS": "false",
+    "SAYLESS_TEST_ORIGIN": "https://sayless-boutique-test.pages.dev"
+  },
+  "commands": [
+    {
+      "step": "npm-test",
+      "exit_code": 0,
+      "seconds": 137.0,
+      "command": "npm test"
+    },
+    {
+      "step": "review",
+      "exit_code": 0,
+      "seconds": 2.8,
+      "command": "npm run test:review"
+    },
+    {
+      "step": "review-v13",
+      "exit_code": 0,
+      "seconds": 2.3,
+      "command": "npm run test:review:v13"
+    },
+    {
+      "step": "review-v14",
+      "exit_code": 0,
+      "seconds": 4.9,
+      "command": "npm run test:review:v14"
+    },
+    {
+      "step": "review-risks",
+      "exit_code": 0,
+      "seconds": 1.9,
+      "command": "npm run test:review:risks"
+    },
+    {
+      "step": "review-push",
+      "exit_code": 0,
+      "seconds": 23.7,
+      "command": "npm run test:review:push"
+    },
+    {
+      "step": "review-push2",
+      "exit_code": 0,
+      "seconds": 29.7,
+      "command": "npm run test:review:push2"
+    },
+    {
+      "step": "review-d1",
+      "exit_code": 0,
+      "seconds": 58.9,
+      "command": "npm run test:review:d1"
+    },
+    {
+      "step": "webauthn",
+      "exit_code": 0,
+      "seconds": 29.9,
+      "command": "npm run test:webauthn:bibliotheque"
+    },
+    {
+      "step": "build-storefront",
+      "exit_code": 0,
+      "seconds": 0.3,
+      "command": "npm run build:storefront"
+    },
+    {
+      "step": "build-test",
+      "exit_code": 0,
+      "seconds": 0.3,
+      "command": "npm run build:storefront:test"
+    },
+    {
+      "step": "build-cloudflare",
+      "exit_code": 0,
+      "seconds": 13.0,
+      "command": "npm run check:cloudflare"
+    },
+    {
+      "step": "free-plan",
+      "exit_code": 0,
+      "seconds": 0.1,
+      "command": "node scripts/check-free-plan.mjs"
+    },
+    {
+      "step": "audit",
+      "exit_code": 0,
+      "seconds": 4.0,
+      "command": "npm audit --json"
+    },
+    {
+      "step": "audit-prod",
+      "exit_code": 0,
+      "seconds": 4.0,
+      "command": "npm audit --omit=dev --json"
+    },
+    {
+      "command": "node --test tests/review/push-third-integrity.test.mjs",
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "command": "node --test tests/review/push-third-open-issues.test.mjs",
+      "exit_code": 1,
+      "passed": 0,
+      "failed": 2
+    }
+  ],
+  "additional_cron_scenario": {
+    "audiences": 4,
+    "business_messages": 12,
+    "single_configuration_notice": 1,
+    "simulated_external_calls_total": 52,
+    "max_d1_calls_per_invocation": 39,
+    "max_external_calls_per_invocation": 16
+  },
+  "cloudflare_remote_tested": false,
+  "physical_iphone_tested": false,
+  "hosted_cpu_measured": false,
+  "github_ci_reviewed": {
+    "run": 46144152736,
+    "windows_job": 140976422457,
+    "ubuntu_job": 140976422324,
+    "conclusion": "success",
+    "windows_fetch_failed_occurrences": 0
+  },
+  "limits": [
+    "Fournisseurs simulés",
+    "Authentificateur logiciel",
+    "Nouvelle recette iPhone et CPU hébergé restent à effectuer après décision du fondateur",
+    "Les erreurs historiques du PC Windows ne sont pas diagnostiquées à distance"
+  ]
+}

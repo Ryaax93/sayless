@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## 2026-11-28 — Work : troisième contre-audit push d05cf65
+
+- Signature native Web Crypto et coordination D1 vérifiées indépendamment, y compris sans le repli de base du banc, concurrence, perte de réponse et reprise froide. Aucun ancien test de Work modifié.
+- 297 tests existants et 13 contrôles commerciaux réussis ; trois nouveaux contrôles d'intégrité réussis. Deux nouveaux tests rouges reproduisent un même défaut résiduel P3-R1 : un résultat ancien peut encore modifier la santé du canal, malgré la protection correcte de l'appareil.
+- Migration 0011, sauvegarde chiffrée, restauration, sessions et passkeys vérifiées localement ; aucun accès Face ID physique ou service distant certifié. Audits npm 0/0 ; compilations réussies ; budgets par invocation vérifiés localement, CPU hébergé à mesurer.
+- Verdict : GO pour redéploiement et recette Cloudflare TEST surveillée, réserve explicite P3-R1 avant validation complète des diagnostics. Rapport et corrections attendues dans `docs/CONTRE-AUDIT-PUSH-3-WORK.md` ; preuves dans `docs/qa/push-review-3/`.
+- Livraison limitée aux tests et à la documentation : aucun runtime, dépendance, déploiement, fusion, main/v2, domaine, paiement réel ou boutique publique modifié.
+
 ## 2026-11-28 — Claude : corrections du second contre-audit push de Work (P2-R1 à P2-R4)
 
 Demandées par le fondateur le 28 novembre à 12 h 21, après le refus de Work (NO GO) sur `56d960b`. Détail : `docs/NOTIFICATIONS-PUSH.md`, section 4 ; `docs/AUDIT-V2-CLAUDE.md`, section 16.

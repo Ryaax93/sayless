@@ -1,0 +1,27 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review:push2
+> node --test tests/review/push-second-integrity.test.mjs tests/review/push-second-migrations.test.mjs tests/review/push-second-open-issues.test.mjs
+
+✔ P2-A1 migrations 0009 + 0010 : données préexistantes identiques, santé reprise, sauvegarde chiffrée restaurable (2365.881636ms)
+✔ P2-A2 migration 0010 interrompue : aucune table ou colonne partiellement ajoutée (383.191607ms)
+✔ P2-A3 message chiffré → service worker → reçu authentifié : accepté distinct de reçu, rejeu refusé (1075.124371ms)
+✔ P2-A4 reçu : session/origine/en-tête requis, ancien essai et abonnement expiré refusés (748.480497ms)
+✔ P2-A5 refus d’affichage et coupure réseau : aucun faux accusé de réception (1408.531125ms)
+✔ P2-A6 Wrangler local : base 0008 peuplée, 0009 puis 0010, dix migrations et seconde application sans effet (29282.53529ms)
+✔ P2-R1 : un premier JWT émis juste avant une frontière horaire reste réutilisé une heure (919.066176ms)
+ℹ Deux démarrages à froid séparés de 2 secondes : 1 JWT. Aucun jeton journalisé.
+✔ P2-R2 : remplacement effectif du webhook défaillant, diagnostic rétabli et incident historique conservé (841.824492ms)
+ℹ Après remplacement accepté : agrégat=ok, ancienne destination en échec=1.
+✔ P2-R3 : expiration concurrente à l’enregistrement, aucun faux succès « abonné » (699.276651ms)
+ℹ Expiration pendant l’inscription : subscribed=false, expired=1.
+✔ P2-R4 : une ancienne réponse Apple acceptée ne masque pas le refus d’un essai plus récent (865.039848ms)
+ℹ Dernier essai refusé 403, ancienne réponse 201 tardive : status=403, erreur=apple_403_BadJwtToken, santé=alert.
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 29480.331713
