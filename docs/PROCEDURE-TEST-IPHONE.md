@@ -123,7 +123,7 @@ Métriques à relever après 24 heures : Cloudflare > Workers & Pages > `sayless
 
 ## E. Mettre à jour TEST sans rien perdre
 
-Pour installer une correction sur l'environnement TEST existant (base D1, secrets, sauvegardes et Face ID conservés), suis `docs/NOTIFICATIONS-PUSH.md`, section 5 :
+Pour installer une correction sur l'environnement TEST existant (base D1, secrets, sauvegardes et Face ID conservés), suis `docs/NOTIFICATIONS-PUSH.md`, section 8 (« Mettre à jour Cloudflare TEST ») :
 
 - **bloc A** : récupérer et vérifier le code ;
 - **bloc B** : diagnostic en lecture seule ;

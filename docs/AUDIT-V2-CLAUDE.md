@@ -238,7 +238,20 @@ Work refusait `be0bb9b` (NO GO) avec cinq anomalies et six tests rouges (`docs/C
 | R5 : Santé verte après un refus d'Apple | État par iPhone ; « OK » seulement après la réception constatée par le service worker | R5 (Work), N06, N16 |
 | Transport D1 local sous Windows | Aucun réessai ; journal sans donnée (cause profonde, opération, étape, versions) ; test strict de Work en CI | D1-W1 (Work), T04 |
 
-## 16. Risques et limites restants
+## 16. Second contre-audit push de Work et corrections (28 novembre 2026)
+
+Work refusait `56d960b` (NO GO) avec quatre nouveaux cas limites et une réserve cryptographique (`docs/CONTRE-AUDIT-PUSH-2-WORK.md`). Ses quatre tests rouges passent, sans modification de ses fichiers ; ses six nouveaux contrôles aussi.
+
+| Point | Correction | Tests |
+| --- | --- | --- |
+| P2-R1 : deux jetons VAPID autour d'une heure pile ; arithmétique secrète maison | Signature native Web Crypto ; jeton partagé par D1 (migration `0011`), réutilisé 6 h, rotation atomique ; aucun jeton sans base | P2-R1 (Work), N11, N12, N17, N18 |
+| P2-R2 : ancien webhook Discord bloquant Santé | Destinations retirées selon la configuration actuelle, historique gardé ; agrégat sur les destinations actives | P2-R2 (Work), N19, N20 |
+| P2-R3 : faux « abonné » pendant une expiration | Admission conditionnelle et atomique, réponse et journal fondés sur la ligne effective | P2-R3 (Work), N21 |
+| P2-R4 : ancienne réponse Apple écrasant la plus récente | Numéro de tentative par appareil, résultat et rétablissement conditionnés ; réponse tardive notée | P2-R4 (Work), N22, N23 |
+| Budget de l'offre gratuite | Coûts du jeton, des tentatives et du retrait Discord comptés | N24 |
+| Migration 0011 | Additive ; base peuplée intacte ; interrompue sans ajout partiel ; vrai Wrangler local | P2-A1 à P2-A6 (Work), N25, N26 |
+
+## 17. Risques et limites restants
 
 - **Cloudflare TEST :** installé par le fondateur le 27 novembre, avec Face ID sur son iPhone ; Discord, Stripe TEST et Resend configurés. Pas encore constatés :
   - la réception d'une notification sur l'iPhone ;
@@ -246,7 +259,7 @@ Work refusait `be0bb9b` (NO GO) avec cinq anomalies et six tests rouges (`docs/C
   - un e-mail Resend réel ;
   - VoiceOver sur l'iPhone ;
   - un transporteur.
-- **Notifications :** Apple et Discord sont simulés dans les tests ; procédure dans `docs/NOTIFICATIONS-PUSH.md`. Le transport D1 local sur le PC du fondateur reste validé sous réserve (`docs/NOTIFICATIONS-PUSH.md`, section 4).
+- **Notifications :** Apple et Discord sont simulés dans les tests ; procédure dans `docs/NOTIFICATIONS-PUSH.md`. Le transport D1 local sur le PC du fondateur reste validé sous réserve (`docs/NOTIFICATIONS-PUSH.md`, section 5). Temps de calcul et requêtes D1 réels sur Cloudflare non mesurés.
 - Offre gratuite : requêtes D1 et appels externes désormais comptés et bornés (section 12) ; les 10 ms de calcul par invocation ne se mesurent pas en local : à relever dans les métriques du Worker de test. La sauvegarde a sa propre minute.
 - Windows : correction prouvée sous Linux avec des ports limités comme Windows et par la CI ; à confirmer sur le PC du fondateur.
 - Le lien de paiement 1.0 affiche les moyens de paiement dynamiques du compte (Klarna possible) : décision du fondateur, rien n’a été modifié dans Stripe.

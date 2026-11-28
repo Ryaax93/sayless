@@ -1,5 +1,26 @@
 # Journal des modifications
 
+## 2026-11-28 — Claude : corrections du second contre-audit push de Work (P2-R1 à P2-R4)
+
+Demandées par le fondateur le 28 novembre à 12 h 21, après le refus de Work (NO GO) sur `56d960b`. Détail : `docs/NOTIFICATIONS-PUSH.md`, section 4 ; `docs/AUDIT-V2-CLAUDE.md`, section 16.
+
+- **P2-R1, jeton VAPID :**
+  - signature ES256 native de Web Crypto ; module de signature maison `es256.mjs` supprimé, plus aucun calcul sur une clé secrète dans le code ;
+  - jeton partagé par D1 (table `vapid_tokens`, migration additive `0011_jeton_vapid_tentatives.sql`) : réutilisé 6 h depuis sa première émission, valable 12 h ;
+  - rotation atomique (condition vérifiée par la base à l'écriture, relecture dans le même lot), relue dix minutes avant l'échéance pour les horloges en retard ;
+  - base injoignable ou absente : aucun jeton, l'envoi attend ; jamais affiché, journalisé ni sauvegardé.
+- **P2-R2, Discord :** un webhook remplacé ou retiré de la configuration est marqué retiré (historique, journal, alerte résolue) ; l'état du canal ne compte que les destinations actives ; jamais retiré s'il sert encore ; de nouveau actif s'il revient.
+- **P2-R3, inscription :** admission conditionnelle et atomique (un seul lot : inscription, remplacement, journal, relecture) ; réponse fondée sur la ligne effective.
+- **P2-R4, tentatives :** numéro de tentative réservé sur l'appareil avant l'appel ; résultat, état de l'appareil et rétablissement du canal liés à cette tentative ; réponse tardive notée dans l'historique et signalée comme dépassée.
+- **Budget gratuit :** coûts du jeton, des tentatives et du retrait Discord ajoutés (`budget.mjs`) ; message push vers deux appareils, jeton créé : 9 requêtes D1 pour 15 prévues (N24).
+- **Tests :**
+  - les quatre critères P2-R1 à P2-R4 et les six contrôles P2-A1 à P2-A6 de Work passent, sans modification de ses fichiers ;
+  - second contre-audit de Work obligatoire en CI Linux et Windows (`test:review:push2`) ;
+  - N11 et N12 réécrits ; N17 à N26 ajoutés (panne de base, réponse perdue, horloges décalées, webhook partagé, Santé, inscriptions simultanées, même seconde, deux clients, tâche planifiée, budget, migration 0011, vrai Wrangler local) ;
+  - banc commun : une base D1 locale est fournie aux appels directs du jeton sans liaison `DB` ; sans aucune base, refus testé.
+- **Non testé :** Apple et Discord réels ; mise à jour sur le compte Cloudflare du fondateur ; réception sur son iPhone ; temps de calcul et requêtes réels sur Cloudflare ; transport D1 sur le PC du fondateur.
+- Aucun déploiement ni fusion. Rien sur `main`, `v2`, le DNS, la boutique publique ou Stripe réel.
+
 ## 2026-11-28 — Work : second contre-audit push 56d960b
 
 - Cinq anciennes anomalies corrigées dans les scénarios initiaux : six anciens critères devenus verts, assertions inchangées. Cascade Apple/Discord simultanément en échec non reproduite.
