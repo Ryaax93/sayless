@@ -1,5 +1,27 @@
 # Journal des modifications
 
+## 2026-11-28 — Claude : corrections du contre-audit push de Work (R1 à R5)
+
+Demandées par le fondateur le 28 novembre à 1 h 03, après le refus de Work (NO GO) sur `be0bb9b`. Détail : `docs/NOTIFICATIONS-PUSH.md`, sections 3 et 4 ; `docs/AUDIT-V2-CLAUDE.md`, section 15.
+
+- **R1, jeton VAPID :** signature ES256 déterministe (RFC 6979) sur l'heure en cours. Toutes les instances du Worker, à froid ou en parallèle, produisent le même jeton, sans stockage ni requête D1. Il change une fois par heure ou si la configuration change. Chaque jeton est vérifié par la clé publique avant usage.
+- **R2, clôture :** sélection, prise de l'envoi et écriture du résultat exigent la même tentative et une ligne non clôturée. Une réponse tardive est seulement notée, sans rouvrir ni relancer l'envoi ni rétablir le canal. Clôture et historique sont écrits dans le même lot.
+- **R3, « Activer » :** un abonnement que le serveur ne confirme pas actif est remplacé (désabonnement puis nouvel abonnement). Un abonnement déclaré expiré n'est jamais réactivé ; l'ancien est gardé, marqué « remplacé ». Aucun « activé » en cas d'échec.
+- **R4, Discord :** santé par destination effective. Migration additive `0010_destinations_reception.sql` ; empreinte non secrète du webhook ; un webhook partagé = un incident. L'état par canal reste un agrégat.
+- **R5, Santé :** état par iPhone (jamais vérifié, refusé, accepté, reçu). « OK » seulement après la réception constatée par le service worker de l'iPhone. Un essai refusé passe Santé en alerte, sans alerte en chaîne.
+- **Transport D1 local (Windows, `fetch failed ×123`) :** aucun réessai ajouté. Cause la plus profonde comptée ; journal technique sans donnée dans `.journaux-tests/` (ignoré par Git).
+- **Diagnostic :** `node scripts/test-env.mjs diagnostic` montre aussi, après 0010, les destinations en échec et la dernière réception constatée.
+- **Tests :**
+  - les six critères de Work (R1a, R1b, R2 à R5) passent, sans aucune modification de ses fichiers ;
+  - N11 à N16 ajoutés ; N06, N08 et T04 étendus ;
+  - CI : contre-audit de Work (`test:review:push`) et test D1 strict (`test:review:d1`) désormais obligatoires sous Linux et Windows.
+- **Non testé :**
+  - Apple et Discord réels, simulés dans les tests ;
+  - la mise à jour sur le compte Cloudflare du fondateur et la réception sur son iPhone ;
+  - le temps de calcul réel sur Cloudflare ;
+  - le transport D1 sur le PC du fondateur.
+- Aucun déploiement ni fusion. Rien sur `main`, `v2`, le DNS, la boutique publique ou Stripe réel.
+
 ## 2026-11-28 — Work : contre-audit du correctif push be0bb9b
 
 - Relecture indépendante du correctif, des diagnostics réels et des tests Windows. Cascade autonome d'alertes non reproduite après correction, y compris Apple et Discord en panne ensemble ; migration 0009 additive, conservation des données et sauvegarde/restauration vérifiées localement.

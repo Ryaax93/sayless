@@ -225,9 +225,28 @@ Cause : Miniflare 4 ouvre une connexion TCP locale par requête SQL ; Windows (1
 | Exigences d'Apple | Jeton VAPID gardé 6 h et valable 12 h ; abonnement à une ancienne clé remplacé | N05 |
 | Mise à jour de TEST | Migration additive `0009`, point de restauration, secrets ni régénérés ni renvoyés | T04, N08 |
 
-## 15. Risques et limites restants
+## 15. Contre-audit push de Work et corrections (28 novembre 2026)
 
-- Rien n’a été essayé sur Cloudflare réel, Stripe en mode test réel, Resend réel, un vrai iPhone (Safari, VoiceOver, notifications), ni avec un transporteur : procédure prête dans `docs/CLOUDFLARE-TEST.md`, à lancer avec l’accord du fondateur.
+Work refusait `be0bb9b` (NO GO) avec cinq anomalies et six tests rouges (`docs/CONTRE-AUDIT-PUSH-WORK.md`). Les six passent, sans modification de ses fichiers.
+
+| Point | Correction | Tests |
+| --- | --- | --- |
+| R1 : jeton VAPID différent selon l'instance | Signature ES256 déterministe (RFC 6979) sur l'heure en cours : même jeton partout, sans stockage ni D1 ; vérifié par la clé publique avant usage | R1a, R1b (Work), N11, N12 |
+| R2 : envoi clôturé relancé par une réponse tardive | Même tentative et ligne non clôturée exigées à chaque écriture ; réponse tardive seulement notée ; clôture et historique dans le même lot | R2 (Work), N13, N07 |
+| R3 : « Activer » réutilisait un abonnement expiré | Abonnement non confirmé par le serveur remplacé ; abonnement expiré jamais réactivé, l'ancien gardé | R3 (Work), N14 |
+| R4 : santé Discord unique pour dix salons | Migration additive `0010` : santé par webhook effectif, sous empreinte non secrète ; agrégat par canal | R4 (Work), N15 |
+| R5 : Santé verte après un refus d'Apple | État par iPhone ; « OK » seulement après la réception constatée par le service worker | R5 (Work), N06, N16 |
+| Transport D1 local sous Windows | Aucun réessai ; journal sans donnée (cause profonde, opération, étape, versions) ; test strict de Work en CI | D1-W1 (Work), T04 |
+
+## 16. Risques et limites restants
+
+- **Cloudflare TEST :** installé par le fondateur le 27 novembre, avec Face ID sur son iPhone ; Discord, Stripe TEST et Resend configurés. Pas encore constatés :
+  - la réception d'une notification sur l'iPhone ;
+  - un paiement Stripe TEST complet ;
+  - un e-mail Resend réel ;
+  - VoiceOver sur l'iPhone ;
+  - un transporteur.
+- **Notifications :** Apple et Discord sont simulés dans les tests ; procédure dans `docs/NOTIFICATIONS-PUSH.md`. Le transport D1 local sur le PC du fondateur reste validé sous réserve (`docs/NOTIFICATIONS-PUSH.md`, section 4).
 - Offre gratuite : requêtes D1 et appels externes désormais comptés et bornés (section 12) ; les 10 ms de calcul par invocation ne se mesurent pas en local : à relever dans les métriques du Worker de test. La sauvegarde a sa propre minute.
 - Windows : correction prouvée sous Linux avec des ports limités comme Windows et par la CI ; à confirmer sur le PC du fondateur.
 - Le lien de paiement 1.0 affiche les moyens de paiement dynamiques du compte (Klarna possible) : décision du fondateur, rien n’a été modifié dans Stripe.
