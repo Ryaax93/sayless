@@ -1,5 +1,26 @@
 # Journal des modifications
 
+## 2026-11-28 — Claude : en-tête Topic refusé par Apple, P3-R1a et P3-R1b
+
+Recette réelle du fondateur sur `d05cf65` (TEST déployé, migrations appliquées) : « Envoyer un essai », le 28 novembre à 17 h 28, refusé par Apple avec **400 BadWebPushTopic**. Troisième contre-audit de Work (`402b1ff`) : GO pour la recette TEST, réserve P3-R1. Détail : `docs/NOTIFICATIONS-PUSH.md`, sections 5 et 6 ; `docs/AUDIT-V2-CLAUDE.md`, section 17.
+
+- **Valeur envoyée :** `Topic: push_test` (type du message, 9 caractères). Alphabet et longueur conformes à la RFC 8030, mais aucun texte base64url n'a une longueur 4n + 1 ; `daily_report` (12) avait été accepté à 10 h.
+- **Types touchés :** sur 30 types envoyés aux appareils, 8 étaient refusés à coup sûr (`technical`, `backup_failed`, `low_stock`…), 14 dépendaient de la tolérance d'Apple aux bits de remplissage, 8 étaient décodables. Le message du commit `9f35e0c` annonçait à tort douze types : ce compte incluait des types qui ne partent jamais vers l'iPhone.
+- **Correction :** plus aucun en-tête Topic, pour l'essai comme pour les envois automatiques. Il est facultatif, et il faisait remplacer une notification non remise par la suivante du même type. Les en-têtes sont réunis dans `pushHeaders`. Clés, abonnements, Face ID, secrets et données inchangés.
+- **P3-R1a et P3-R1b :**
+  - les identités de tentative d'appareil (`deviceAttempts`) sont propagées, en remise comme en échec ;
+  - rétablissement, mise en panne, résolution et création d'incident (condition `when` du notificateur) ne s'appliquent que si l'une de ces tentatives est encore la dernière de son appareil, vérifié par la base dans le même lot ;
+  - chaque message garde son vrai résultat.
+- **Tests :**
+  - P3-R1a, P3-R1b et P3-A1 à P3-A3 de Work passent, sans modification de ses fichiers ;
+  - troisième contre-audit obligatoire en CI (`test:review:push3`) ;
+  - N05 exige l'absence de Topic : il ne contrôlait que l'alphabet et la longueur, et laissait passer `push_test` ;
+  - N27 : service Apple simulé strict, essai manuel et trente types acceptés sans Topic ;
+  - N28 à N30 : deux appareils, deux essais manuels, incident d'une panne déjà finie.
+- **Documentation :** portée du cache du jeton VAPID précisée ; restauration et redéploiement distingués.
+- **Non testé :** réception réelle sur l'iPhone avec cette correction ; la règle exacte d'Apple pour Topic n'est pas documentée par Apple.
+- Aucun déploiement ni fusion. Rien sur `main`, `v2`, le DNS, la boutique publique ou Stripe réel.
+
 ## 2026-11-28 — Work : troisième contre-audit push d05cf65
 
 - Signature native Web Crypto et coordination D1 vérifiées indépendamment, y compris sans le repli de base du banc, concurrence, perte de réponse et reprise froide. Aucun ancien test de Work modifié.

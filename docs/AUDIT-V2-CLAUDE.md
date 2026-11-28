@@ -251,15 +251,23 @@ Work refusait `56d960b` (NO GO) avec quatre nouveaux cas limites et une réserve
 | Budget de l'offre gratuite | Coûts du jeton, des tentatives et du retrait Discord comptés | N24 |
 | Migration 0011 | Additive ; base peuplée intacte ; interrompue sans ajout partiel ; vrai Wrangler local | P2-A1 à P2-A6 (Work), N25, N26 |
 
-## 17. Risques et limites restants
+## 17. Recette réelle (400 BadWebPushTopic) et troisième contre-audit de Work (28 novembre 2026)
 
-- **Cloudflare TEST :** installé par le fondateur le 27 novembre, avec Face ID sur son iPhone ; Discord, Stripe TEST et Resend configurés. Pas encore constatés :
-  - la réception d'une notification sur l'iPhone ;
+| Point | Correction | Tests |
+| --- | --- | --- |
+| Refus d'Apple 400 BadWebPushTopic à l'essai réel (`Topic: push_test`, 9 caractères, non décodable en base64url) | Plus aucun en-tête Topic, ni pour l'essai ni pour les envois automatiques ; en-têtes réunis dans `pushHeaders` | N05 (absence de Topic), N27 (Apple simulé strict, 31 envois) |
+| P3-R1a : ancien refus automatique déclarant le canal en panne | Identités de tentative d'appareil propagées ; mise en panne et incident conditionnés en SQL | P3-R1a (Work), N28, N30 |
+| P3-R1b : ancien succès résolvant un refus plus récent | Rétablissement et résolution conditionnés en SQL dans le même lot | P3-R1b (Work), N28, N29 |
+
+## 18. Risques et limites restants
+
+- **Cloudflare TEST :** installé par le fondateur le 27 novembre, avec Face ID sur son iPhone ; Discord, Stripe TEST et Resend configurés ; mis à jour sur `d05cf65` le 28 novembre (migrations appliquées, accès et sauvegardes conservés, d'après le fondateur). Rapport quotidien reçu sur l'iPhone à 10 h sur la version précédente. Pas encore constatés :
+  - la réception d'un essai sur l'iPhone avec la correction du Topic ;
   - un paiement Stripe TEST complet ;
   - un e-mail Resend réel ;
   - VoiceOver sur l'iPhone ;
   - un transporteur.
-- **Notifications :** Apple et Discord sont simulés dans les tests ; procédure dans `docs/NOTIFICATIONS-PUSH.md`. Le transport D1 local sur le PC du fondateur reste validé sous réserve (`docs/NOTIFICATIONS-PUSH.md`, section 5). Temps de calcul et requêtes D1 réels sur Cloudflare non mesurés.
+- **Notifications :** Apple et Discord sont simulés dans les tests ; procédure dans `docs/NOTIFICATIONS-PUSH.md`. Le transport D1 local sur le PC du fondateur reste validé sous réserve (`docs/NOTIFICATIONS-PUSH.md`, section 7). Temps de calcul et requêtes D1 réels sur Cloudflare non mesurés.
 - Offre gratuite : requêtes D1 et appels externes désormais comptés et bornés (section 12) ; les 10 ms de calcul par invocation ne se mesurent pas en local : à relever dans les métriques du Worker de test. La sauvegarde a sa propre minute.
 - Windows : correction prouvée sous Linux avec des ports limités comme Windows et par la CI ; à confirmer sur le PC du fondateur.
 - Le lien de paiement 1.0 affiche les moyens de paiement dynamiques du compte (Klarna possible) : décision du fondateur, rien n’a été modifié dans Stripe.

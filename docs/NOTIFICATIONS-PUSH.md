@@ -1,6 +1,6 @@
 # Notifications iPhone : boucle corrigée, deux contre-audits de Work, diagnostic
 
-**Préparé par Claude le 27 novembre 2026, complété le 28 novembre** après deux contre-audits indépendants de Work : refus de `be0bb9b` (`docs/CONTRE-AUDIT-PUSH-WORK.md`), puis de `56d960b` (`docs/CONTRE-AUDIT-PUSH-2-WORK.md`). La mise à jour de TEST n'est faite que par le fondateur, avec les commandes de la dernière section.
+**Préparé par Claude le 27 novembre 2026, complété le 28 novembre** après trois contre-audits indépendants de Work (`docs/CONTRE-AUDIT-PUSH-WORK.md`, `-2-`, `-3-`) et la recette réelle du fondateur sur iPhone (400 BadWebPushTopic, section 5). La mise à jour de TEST n'est faite que par le fondateur, avec les commandes de la dernière section.
 
 Rien ici ne touche `main`, `v2`, la boutique publique, le DNS ni Stripe réel. Rien n'est déployé par Claude ni par Work.
 
@@ -186,9 +186,9 @@ Work a confirmé les cinq corrections précédentes : ses six anciens tests pass
 - **Durées.** Valable 12 heures. Réutilisé au moins 6 heures **depuis sa première émission**, par toute instance, quelle que soit l'heure civile.
 - **Rotation atomique.** Le nouveau jeton ne remplace l'ancien que si l'ancien a 6 heures, ou expire dans moins d'une heure. La base vérifie cette condition au moment même de l'écriture, et le même lot relit le jeton enregistré. Une seule instance gagne ; toutes utilisent le jeton de la base.
 - **Horloges décalées.** Dix minutes avant la rotation, chaque envoi relit la base : une instance en retard prend aussitôt le nouveau jeton, sans revenir à l'ancien. Une instance en avance de quelques minutes renouvelle au plus quelques minutes plus tôt.
-- **Base injoignable ou absente : aucun jeton.** L'envoi attend et la file le réessaie. Un jeton signé mais pas enregistré n'est jamais utilisé, même si la réponse de la base se perd.
+- **Base injoignable ou absente : aucun nouveau jeton.** Création, renouvellement et première lecture échouent proprement : l'envoi attend et la file le réessaie. Un jeton signé mais pas enregistré n'est jamais utilisé, même si la réponse de la base se perd. Une instance déjà en service peut continuer d'utiliser, jusqu'à dix minutes avant son renouvellement, le jeton vérifié qu'elle a relu dans la base : ce n'est pas un jeton non coordonné.
 - **Contrôles.** Chaque jeton est vérifié avec la clé publique avant d'être enregistré ou réutilisé. Une paire de clés incohérente ne produit aucun jeton.
-- **Secret.** Le jeton n'est jamais affiché ni journalisé. La sauvegarde copie la table vide : le premier envoi après une restauration en émet un nouveau.
+- **Secret.** Le jeton n'est jamais affiché ni journalisé. La sauvegarde copie la table vide : après une **restauration** de la base, le premier envoi émet un nouveau jeton. Un **redéploiement** ordinaire garde la table et le jeton en cours.
 
 **Coût.** Signature native : environ 0,1 ms de calcul, mesuré par Work sous Node. Base : une lecture par instance toutes les 6 heures environ, plus un lot par rotation. Un message push vers deux appareils, jeton créé, coûte 9 requêtes D1 (test N24), pour un budget prévu de 15 et une limite de 50 par invocation.
 
@@ -256,7 +256,74 @@ Work a confirmé les cinq corrections précédentes : ses six anciens tests pass
 - **Mes tests :** N11 et N12 réécrits pour la nouvelle signature ; N17 à N26 ajoutés, dont la migration `0011` sur une base peuplée et un vrai Wrangler local (onze migrations, seconde application sans effet).
 - **Expérience cryptographique de Work** (`push-crypto-experiment.mjs`) : elle comparait le module retiré ; elle ne s'applique plus.
 
-## 5. Avertissement D1 sous Windows (`fetch failed ×123`)
+## 5. Recette réelle du 28 novembre : 400 BadWebPushTopic
+
+**Constat du fondateur.** Après la mise à jour de TEST sur `d05cf65`, « Envoyer un essai » à 17 h 28 a été refusé par Apple : **400 BadWebPushTopic**, en-tête Topic non conforme. C'est la première réponse réelle d'Apple sur cette version, et elle se trouve maintenant affichée grâce au diagnostic.
+
+**Valeur envoyée.** L'en-tête Topic reprenait le type du message, réduit aux caractères autorisés et à 32 caractères :
+
+- essai depuis STUDIO : `Topic: push_test`, 9 caractères ;
+- envois automatiques : le type de la notification, par exemple `order_paid` (10), `technical` (9) ou `daily_report` (12).
+
+Aucun secret n'en fait partie : ni jeton, ni adresse d'abonnement, ni clé.
+
+**Pourquoi Apple refuse.**
+
+- La RFC 8030 et Apple demandent au plus 32 caractères de l'alphabet base64url : `push_test` les respecte.
+- Mais un texte base64url n'a jamais une longueur de la forme 4n + 1 (5, 9, 13…). `push_test` (9 caractères) ne peut donc être le résultat d'aucun encodage base64url.
+- Le rapport quotidien de 10 h, avec `Topic: daily_report` (12 caractères, décodable), a été reçu sur l'iPhone sur la version précédente, qui construisait le Topic de la même façon.
+- D'autres projets ont observé le même refus d'Apple avec des Topic de longueur 5 ou 25.
+
+**Conclusion la plus probable** : Apple décode le Topic en base64url et refuse ce qui ne se décode pas, ce que sa documentation ne dit pas explicitement. Sur les trente types de notification envoyés aux appareils :
+
+- **8 dans le même cas que l'essai**, refusés à coup sûr : `technical`, `backup_failed`, `backup_not_configured`, `low_stock`, `drop_sold_out`, `size_sold_out`, `mail_intent_stuck`, `legacy_link_without_stock` ;
+- **14 acceptés seulement si Apple tolère des bits de remplissage non nuls**, dont `order_paid` et `channel_failure` ;
+- **8 décodables**, dont `daily_report`.
+
+Ce point ne peut pas être prouvé sans Apple : la correction ne dépend pas de la réponse.
+
+**Correction.**
+
+- **Plus aucun en-tête Topic**, ni pour l'essai, ni pour les envois automatiques. Il est facultatif chez Apple comme dans la RFC 8030.
+- Il était aussi nuisible : pendant que l'iPhone était hors connexion, deux commandes avec le même Topic `order_paid` n'auraient laissé arriver que la dernière.
+- Les en-têtes envoyés sont réunis dans `pushHeaders` : `Authorization`, `TTL: 86400`, `Content-Encoding: aes128gcm`, `Content-Type` et `Urgency` (`normal`, ou `high` pour une alerte critique). Tous sont conformes à la documentation d'Apple.
+- Les clés VAPID, les abonnements iPhone, Face ID, les secrets et les données ne changent pas.
+
+**Messages déjà refusés.** Un refus 400 est définitif : les messages concernés ne sont pas renvoyés automatiquement. Après la mise à jour, « Envoyer un essai » doit être accepté. « Clôturer » range ensuite les anciens envois échoués, en gardant l'historique. Les mêmes alertes étaient aussi parties sur Discord.
+
+**Preuves :**
+
+- N05 exige désormais l'absence de Topic. Il ne contrôlait que l'alphabet et la longueur, ce qui laissait passer `push_test`.
+- N27 : un service Apple simulé, strict, refuse `push_test`, `technical` et un Topic de 33 caractères. Il accepte l'essai manuel et trente types de notification automatique, tous envoyés sans Topic, avec un jeton vérifié.
+
+## 6. Troisième contre-audit de Work : P3-R1a et P3-R1b
+
+Work a donné un **GO pour la recette TEST**, avec une réserve sur les diagnostics : deux courses rendaient encore l'état du canal iPhone faux, alors que l'état de chaque appareil était juste.
+
+- **P3-R1a.** Un ancien envoi automatique refusé (403), arrivé après un essai plus récent accepté et reçu, déclarait le canal en panne et ouvrait un incident.
+- **P3-R1b.** Un ancien essai accepté rétablissait le canal et résolvait l'incident d'un refus plus récent survenu juste avant.
+
+**Correction.**
+
+- Chaque résultat d'envoi, remise comme échec, transmet l'identité des tentatives d'appareil concernées : appareil et numéro de tentative. Elles ne sont jamais journalisées.
+- Rétablissement de la destination, résolution d'un incident, mise en panne et création d'un incident : la base vérifie, dans la même transaction, que l'une de ces tentatives est encore la dernière de son appareil.
+- Cela vaut pour l'essai depuis STUDIO comme pour la file automatique. La création d'un incident est elle-même conditionnée : un essai accepté juste avant son écriture l'empêche.
+- Chaque message garde son vrai résultat (remis ou échoué) ; les gardes de bail et de clôture sont conservées. Règle inchangée : un message est remis dès qu'un appareil l'accepte.
+
+**Preuves :**
+
+- P3-R1a de Work : `appareil=201, canal=ok, Santé=ok, incidents ouverts=0` ;
+- P3-R1b de Work : `appareil=403, canal=failing, incidents ouverts=1` ;
+- N28 : deux appareils. Une remise encore à jour rétablit le canal ; une remise dépassée par un essai refusé ne le rétablit pas, mais le message reste noté remis.
+- N29 : deux essais manuels, dans les deux ordres.
+- N30 : aucun incident créé pour une panne finie avant son écriture. Le test échoue si la condition est retirée.
+
+**Autres remarques de Work.**
+
+- La précision sur le cache du jeton est faite (section 4, P2-R1), ainsi que la différence entre restauration et redéploiement.
+- Le repli de base fourni par le banc aux anciens appels directs reste en place. Pour le retirer, il faudrait que ces tests de Work passent eux-mêmes `DB` ; c'est son choix.
+
+## 7. Avertissement D1 sous Windows (`fetch failed ×123`)
 
 **Ce que c'est.** Un compteur du banc de test : des requêtes entre Node et le moteur D1 local (Miniflare et workerd), sur ton PC, ont échoué au niveau de la connexion. Ce ne sont ni des ventes, ni des appels à Apple.
 
@@ -283,7 +350,7 @@ Work a confirmé les cinq corrections précédentes : ses six anciens tests pass
 
 **Ce qu'il reste à faire.** Le bloc A lance d'abord le test D1 strict seul, dans une copie neuve. Si un journal apparaît, envoie-le-moi. Le transport D1 local sur ton PC reste **validé sous réserve** jusqu'à une exécution sans avertissement ou une cause identifiée.
 
-## 6. Codes affichés et quoi faire
+## 8. Codes affichés et quoi faire
 
 | Code | Ce que ça veut dire | Que faire |
 | --- | --- | --- |
@@ -291,7 +358,8 @@ Work a confirmé les cinq corrections précédentes : ses six anciens tests pass
 | `apple_403_BadVapidPublicKey` | Clé publique VAPID refusée | Même chose |
 | `apple_403_VapidPkHashMismatch` | L'iPhone s'est abonné avec une autre clé | Cloche, puis « Activer » de nouveau |
 | `apple_410` ou `apple_404` | Abonnement expiré chez Apple | Cloche, puis « Activer » de nouveau |
-| `apple_400_…` | En-tête ou chiffrement refusé | Envoie-moi le code exact |
+| `apple_400_BadWebPushTopic` | Ancien en-tête Topic refusé par Apple (section 5), corrigé | Après la mise à jour : « Envoyer un essai », puis « Clôturer » les anciens envois |
+| `apple_400_…` (autre raison) | En-tête ou chiffrement refusé | Envoie-moi le code exact |
 | `apple_429`, `apple_5xx`, `reseau`, `delai` | Panne passagère | Rien : nouvel essai automatique |
 | `aucun_appareil` | Aucun iPhone abonné au moment de l'envoi | Cloche, puis « Activer » ; ce n'est pas une panne |
 | `discord_404`, `discord_401`, `discord_403` | Webhook Discord supprimé ou refusé ; Santé nomme le salon | Recrée le webhook de ce salon (`docs/DISCORD.md`) |
@@ -306,17 +374,18 @@ Work a confirmé les cinq corrections précédentes : ses six anciens tests pass
 
 **Ne régénère pas les clés VAPID** pour essayer de régler un refus : cela obligerait à réabonner l'iPhone sans rien corriger. Envoie-moi d'abord le code affiché.
 
-## 7. Ce qui n'est pas vérifié
+## 9. Ce qui n'est pas vérifié
 
-- Apple et Discord sont simulés dans tous les tests. Le premier vrai résultat sera ton essai depuis l'iPhone après la mise à jour : la ligne « Réception constatée ».
+- Apple et Discord sont simulés dans les tests. Premiers résultats réels sur `d05cf65` : Apple a refusé l'en-tête Topic (section 5). La réception avec la correction reste à constater sur ton iPhone : la ligne « Réception constatée ».
+- Apple ne documente pas son contrôle du Topic : la cause donnée en section 5 est la plus probable, pas une certitude. La correction (aucun Topic) ne dépend pas de ce point.
 - Le temps de calcul réel sur Cloudflare n'est pas mesuré. Sous Node, la signature native coûte environ 0,1 ms (mesure de Work), une fois toutes les 6 heures environ.
 - Les requêtes D1 sont comptées en local (test N24), pas sur Cloudflare.
 - Apple n'a jamais été sollicité pour vérifier sa tolérance aux renouvellements du jeton : la règle d'Apple (pas plus d'un renouvellement par heure) est respectée par construction, avec 6 heures au moins.
-- Le transport D1 local sur ton PC est validé sous réserve (section 5).
+- Le transport D1 local sur ton PC est validé sous réserve (section 7).
 - La confirmation de réception par Safari sur iPhone est testée en simulation seulement.
 - Les liaisons et secrets réellement présents sur Cloudflare ne sont pas lus par moi. L'assistant les contrôle pendant la mise à jour.
 
-## 8. Mettre à jour Cloudflare TEST (PowerShell)
+## 10. Mettre à jour Cloudflare TEST (PowerShell)
 
 Base D1, secrets, sauvegardes, Face ID et codes de secours sont conservés :
 
@@ -347,7 +416,7 @@ Ce bloc ne touche ni le dossier `sayless-test`, ni Cloudflare. Les données des 
   if ($LASTEXITCODE -ne 0) { throw 'Installation incomplète' }
   npm.cmd run test:review:d1
   if ($LASTEXITCODE -ne 0) { throw "Transport D1 en échec : envoie-moi le dossier $copie\.journaux-tests" }
-  foreach ($suite in 'test:review:push', 'test:review:push2', 'test', 'test:review', 'test:review:v13', 'test:review:v14', 'test:review:risks', 'test:webauthn:bibliotheque') {
+  foreach ($suite in 'test:review:push', 'test:review:push2', 'test:review:push3', 'test', 'test:review', 'test:review:v13', 'test:review:v14', 'test:review:risks', 'test:webauthn:bibliotheque') {
     npm.cmd run $suite
     if ($LASTEXITCODE -ne 0) { throw "Suite en échec : $suite" }
   }
@@ -414,7 +483,7 @@ Il n'affiche que des codes, des nombres et des dates : aucune adresse, aucune cl
    - Sinon, envoie-moi la ligne affichée. Elle ne contient aucun secret.
 5. Plus, puis Santé du site. Attendu : « Notifications iPhone » en OK, avec « Réception constatée sur … ».
    - Si la ligne reste « Accepté … pas encore constatée » plus d'une minute alors que la notification est arrivée, envoie-moi une capture.
-6. Toujours dans Santé, section « Envois échoués » : touche « Clôturer » et valide avec Face ID. Les lignes restent dans l'historique.
+6. Toujours dans Santé, section « Envois échoués » : touche « Clôturer » et valide avec Face ID. Les lignes restent dans l'historique, y compris les envois refusés pour l'en-tête Topic.
 7. L'historique affiche « Essai de notification iPhone » et « Envois échoués clôturés ».
 
 **Contrôle deux heures plus tard** : relance le bloc B. Aucun nouvel envoi iPhone non remis ne doit apparaître après l'heure de la mise à jour, et « Destinations en échec » doit indiquer « aucune », ou seulement un salon que tu sais à réparer.
