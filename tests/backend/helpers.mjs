@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { createHmac, randomBytes } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { availableParallelism, release, type } from 'node:os';
 import { handleOps, handlePublicApi, createContext } from '../../backend/src/routes.mjs';
 import { StripeError } from '../../backend/src/stripe.mjs';
@@ -94,7 +95,7 @@ export async function stopDatabases() {
     writeFileSync(target, [head, ...engineJournal].map((x) => JSON.stringify(x)).join('\n') + '\n');
     console.error(`\n[banc] Moteur D1 local : échecs de connexion dans ${file} (${engineFailureSummary()}). Cause d’environnement`
       + ' (ports locaux, charge de la machine), à distinguer d’un défaut métier, mais validation SOUS RÉSERVE du transport local.'
-      + `\n[banc] Journal technique (sans aucune donnée) : ${decodeURIComponent(target.pathname).replace(/^\/([A-Za-z]:)/, '$1')}`);
+      + `\n[banc] Journal technique (sans aucune donnée) : ${fileURLToPath(target)}`);
   }
 }
 // KV en mémoire pour les sauvegardes : `corrupt` simule une écriture altérée par le stockage.

@@ -13,6 +13,7 @@ import { createContext, runScheduled } from '../../backend/src/routes.mjs';
 import { b64url, fromB64url } from '../../backend/src/lib.mjs';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 
 before(startDatabases);
 after(stopDatabases);
@@ -399,7 +400,8 @@ test('N10 tâche planifiée réelle : panne iPhone avec 40 messages en attente, 
 test('N11 jeton VAPID identique dans deux isolates workerd sans stockage partagé, en parallèle ; nouveau à l’heure suivante ou si la configuration change', async () => {
   const { build } = await import('esbuild');
   const { Miniflare, convertV4MiniflareOptions } = await import('miniflare');
-  const root = new URL('../../', import.meta.url).pathname;
+  // Chemin du système (Windows : « D:\… », pas « /D:/… »), sinon esbuild ne trouve pas le module.
+  const root = fileURLToPath(new URL('../../', import.meta.url));
   const bundle = await build({ bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'], stdin: { resolveDir: root, loader: 'js',
     contents: `import { vapidAuthorization } from './backend/src/push.mjs';
       export default { async fetch(request, env) {
