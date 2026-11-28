@@ -142,8 +142,17 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
     assert.match(diag.text, /lecture seule/);
     assert.match(diag.text, /push · dead · aucune notification remise : 28/);
     assert.match(diag.text, /Appareils iPhone enregistrés : 1 /);
+    assert.doesNotMatch(diag.text, /Destinations en échec/, 'avant 0010 : section absente, aucune erreur');
+    // Même diagnostic après les migrations 0009 et 0010 : salon Discord en panne nommé (jamais son
+    // adresse), canal iPhone sain, dernier essai et réception constatée sur l'iPhone.
+    const after = await run(['diagnostic'], { FAKE_D1_MIGRATED: '1' });
+    assert.equal(after.code, 0, after.text);
+    assert.match(after.text, /discord : en échec depuis le .*, 2 message\(s\), discord_404/);
+    assert.match(after.text, /discord · salon commandes : en échec depuis le .*, 2 message\(s\), discord_404/);
+    assert.match(after.text, /iPhone actifs : 1 ; dernier essai : \d\d\/\d\d \d\d:\d\d ; dernière réception constatée sur l’iPhone : \d\d\/\d\d \d\d:\d\d/);
+    assert.doesNotMatch(after.text, /discord\.com|webhooks\//, 'aucune adresse de webhook');
     const statements = readFileSync(join(cloudDir, 'sql.log'), 'utf8').trim().split('\n').filter(Boolean);
-    assert.ok(statements.length >= 4 && statements.every((q) => /^SELECT /.test(q.trim())), 'aucune écriture');
+    assert.ok(statements.length >= 10 && statements.every((q) => /^SELECT /.test(q.trim())), 'aucune écriture');
     assert.ok(statements.every((q) => !/endpoint|p256dh|auth|payload|body/.test(q)), 'ni adresse, ni clé, ni contenu lu');
     const state = await run(['etat']);
     assert.equal(state.code, 0, state.text);

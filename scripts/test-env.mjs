@@ -366,11 +366,22 @@ Appareils iPhone enregistrés : ${devices?.n ?? 0} (abonnement du ${when(devices
   for (const r of read(`SELECT kind, COUNT(*) AS n, MIN(at) AS premier FROM notifications GROUP BY kind ORDER BY premier LIMIT 20`)) {
     say(`  ${r.kind} : ${r.n} (première le ${when(r.premier)})`);
   }
-  if (read(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_health'`).length) {
+  const tables = new Set(read(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('channel_health', 'delivery_health')`).map((r) => r.name));
+  if (tables.has('channel_health')) {
     say('\nÉtat des canaux (après la mise à jour) :');
     for (const r of read('SELECT channel, state, failures, last_error, since, last_ok_at FROM channel_health ORDER BY channel')) {
       say(`  ${r.channel} : ${r.state === 'failing' ? `en échec depuis le ${when(r.since)}, ${r.failures} message(s), ${r.last_error}` : 'OK'} ; dernier succès : ${when(r.last_ok_at)}`);
     }
+  }
+  // Après la migration 0010 : destinations en échec (salon Discord nommé, jamais son adresse) et
+  // dernier essai iPhone, avec la réception constatée par l'iPhone lui-même.
+  if (tables.has('delivery_health')) {
+    say('\nDestinations en échec (salons Discord, iPhone, e-mails clients) :');
+    const failing = read(`SELECT channel, label, failures, last_error, since FROM delivery_health WHERE state = 'failing' ORDER BY channel, label`);
+    if (!failing.length) say('  aucune');
+    for (const r of failing) say(`  ${r.channel} · ${r.label ?? 'destination'} : en échec depuis le ${when(r.since)}, ${r.failures} message(s), ${r.last_error}`);
+    const [check] = read(`SELECT COUNT(*) AS n, MAX(test_sent_at) AS essai, MAX(received_at) AS recu FROM push_subscriptions WHERE expired_at IS NULL`);
+    say(`\niPhone actifs : ${check?.n ?? 0} ; dernier essai : ${when(check?.essai)} ; dernière réception constatée sur l’iPhone : ${when(check?.recu)}`);
   }
   say('\nLecture : « aucun appareil abonné » = aucun iPhone enregistré côté serveur au moment de l’envoi ;'
     + ' « aucune notification remise » = Apple a refusé ou n’a pas répondu (code exact visible après la mise à jour, essai depuis STUDIO).');

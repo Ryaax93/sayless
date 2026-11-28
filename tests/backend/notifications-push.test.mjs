@@ -11,6 +11,8 @@ import { ALERT_REPEAT, deliverOutbox } from '../../backend/src/notify.mjs';
 import { fingerprint, vapidAuthorization } from '../../backend/src/push.mjs';
 import { createContext, runScheduled } from '../../backend/src/routes.mjs';
 import { b64url, fromB64url } from '../../backend/src/lib.mjs';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 
 before(startDatabases);
 after(stopDatabases);
@@ -548,4 +550,39 @@ test('N15 Discord par destination : webhook unique partagé = un incident, jamai
   assert.equal(line.state, 'alert');
   assert.match(line.detail, /salon commandes en échec depuis le .*webhook Discord refusé ou supprimé \(404\)/);
   assert.ok(!JSON.stringify(line).includes('webhooks/2/commandes'), 'aucune adresse de webhook affichée');
+});
+
+test('N16 service worker de l’iPhone : réception confirmée après l’affichage, seulement pour un essai, avec la session STUDIO ; jamais d’échec d’affichage', async () => {
+  const source = await readFile(new URL('../../studio/sw.js', import.meta.url), 'utf8');
+  const order = [];
+  let failFetch = false;
+  const handlers = new Map();
+  vm.runInNewContext(source, {
+    self: { addEventListener: (name, fn) => handlers.set(name, fn),
+      registration: { showNotification: async (title) => { await new Promise((r) => setTimeout(r, 5)); order.push(['affichée', title]); } } },
+    fetch: async (url, init) => { order.push(['confirmée', url, init]); if (failFetch) throw new TypeError('réseau coupé'); return { ok: true }; },
+  });
+  const push = async (payload) => {
+    let pending;
+    handlers.get('push')({ data: payload === undefined ? null : { json: () => payload }, waitUntil: (p) => { pending = p; } });
+    await pending;
+  };
+  const id = 'a1'.repeat(16);
+  await push({ title: 'Essai SAYLESS STUDIO', body: 'Essai', kind: 'push_test', test: id });
+  assert.deepEqual(order.map((o) => o[0]), ['affichée', 'confirmée'], 'confirmée seulement une fois la notification affichée');
+  const [, url, init] = order[1];
+  assert.equal(url, '/api/admin/push/receipt');
+  assert.equal(init.method, 'POST');
+  assert.equal(init.credentials, 'same-origin', 'session STUDIO de l’iPhone requise');
+  assert.equal(init.headers['X-Studio-Request'], '1');
+  assert.deepEqual(JSON.parse(init.body), { test: id }, 'identifiant de l’essai seulement');
+  order.length = 0;
+  for (const payload of [undefined, { title: 'Commande', body: 'Nouvelle commande', kind: 'order_paid' }, { title: 'Faux', test: 'pas-un-identifiant' }, { title: 'Faux', test: 'A1'.repeat(16) }]) {
+    await push(payload);
+  }
+  assert.deepEqual(order.map((o) => o[0]), ['affichée', 'affichée', 'affichée', 'affichée'], 'aucune confirmation hors essai ou identifiant invalide');
+  order.length = 0;
+  failFetch = true;
+  await push({ title: 'Essai hors ligne', kind: 'push_test', test: id });
+  assert.deepEqual(order.map((o) => o[0]), ['affichée', 'confirmée'], 'confirmation impossible : la notification reste affichée, sans erreur');
 });

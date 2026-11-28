@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { createHmac, randomBytes } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { createRequire } from 'node:module';
+import { availableParallelism, release, type } from 'node:os';
 import { handleOps, handlePublicApi, createContext } from '../../backend/src/routes.mjs';
 import { StripeError } from '../../backend/src/stripe.mjs';
 import { recordInventory } from '../../backend/src/stock.mjs';
@@ -88,7 +89,8 @@ export async function stopDatabases() {
     const target = new URL(`d1-transport-${file.replace(/\.test\.mjs$/, '')}-${process.pid}.jsonl`, dir);
     const { mkdirSync, writeFileSync } = await import('node:fs');
     mkdirSync(dir, { recursive: true });
-    const head = { fichier: file, node: process.version, plateforme: `${process.platform} ${process.arch}`, miniflare: MINIFLARE_VERSION, summary: engineFailureSummary() };
+    const head = { fichier: file, node: process.version, plateforme: `${process.platform} ${process.arch}`, systeme: `${type()} ${release()}`,
+      processeurs: availableParallelism(), miniflare: MINIFLARE_VERSION, summary: engineFailureSummary() };
     writeFileSync(target, [head, ...engineJournal].map((x) => JSON.stringify(x)).join('\n') + '\n');
     console.error(`\n[banc] Moteur D1 local : échecs de connexion dans ${file} (${engineFailureSummary()}). Cause d’environnement`
       + ' (ports locaux, charge de la machine), à distinguer d’un défaut métier, mais validation SOUS RÉSERVE du transport local.'

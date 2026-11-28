@@ -47,12 +47,19 @@ if (a === 'whoami') {
   if (!db) fail(`Couldn't find a D1 DB with the name or binding '${words[3]}'`);
   out(JSON.stringify({ bookmark: `00000085-0000024c-00004c6d-${'8e61117bf38d7adb71b934ebbf891683'}` }));
 } else if (a === 'd1' && b === 'execute') {
-  // Base distante simulée : réponses figées d'une base en pleine boucle (avant la migration 0009).
+  // Base distante simulée : réponses figées d'une base en pleine boucle (avant la migration 0009) ;
+  // avec FAKE_D1_MIGRATED, la même base après 0009 et 0010 (un salon Discord en panne, essai reçu).
   const command = opt('--command');
   appendFileSync(join(dir, 'sql.log'), `${command.replace(/\s+/g, ' ').trim()}\n`);
+  const migrated = Boolean(process.env.FAKE_D1_MIGRATED);
   const results = /FROM outbox/.test(command) ? [{ channel: 'push', status: 'dead', code: 'aucune notification remise', n: 28, premier: 1795000000, dernier: 1795026000 }]
-    : /FROM push_subscriptions/.test(command) ? [{ n: 1, echecs: 30, premier: 1795001800, dernier: 1795001800, succes: null }]
-      : /FROM notifications/.test(command) ? [{ kind: 'technical', n: 28, premier: 1795001860 }] : [];
+    : migrated && /test_sent_at/.test(command) ? [{ n: 1, essai: 1795090000, recu: 1795090004 }]
+      : /FROM push_subscriptions/.test(command) ? [{ n: 1, echecs: 30, premier: 1795001800, dernier: 1795001800, succes: null }]
+        : /FROM notifications/.test(command) ? [{ kind: 'technical', n: 28, premier: 1795001860 }]
+          : migrated && /FROM sqlite_master/.test(command) ? [{ name: 'channel_health' }, { name: 'delivery_health' }]
+            : migrated && /FROM channel_health/.test(command) ? [{ channel: 'discord', state: 'failing', failures: 2, last_error: 'discord_404', since: 1795080000, last_ok_at: 1795089000 },
+              { channel: 'push', state: 'ok', failures: 0, last_error: null, since: 1795090000, last_ok_at: 1795090000 }]
+              : migrated && /FROM delivery_health/.test(command) ? [{ channel: 'discord', label: 'salon commandes', failures: 2, last_error: 'discord_404', since: 1795080000 }] : [];
   out(JSON.stringify([{ results, success: true, meta: { changes: 0 } }]));
 } else if (a === 'secret' && b === 'list') {
   const w = cloud.workers[var_(config(), 'name')];
