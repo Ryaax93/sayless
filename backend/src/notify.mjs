@@ -101,11 +101,15 @@ export async function reconcileDiscordDestinations(env, now) {
 // iPhone : un message n'est mis en file que si un appareil est abonné ; sans appareil, la notification
 // reste dans STUDIO et rien n'échoue (l'absence d'appareil n'est pas une panne).
 export function createNotifier(env, deps) {
-  return async function notify({ kind, ref, level = 'info', title, body, exclude = [] }) {
+  // `when` : condition SQL (et ses valeurs) vérifiée par la base au moment même de l'écriture ; si elle
+  // est fausse, ni la notification ni ses envois ne sont créés (incident d'une panne déjà finie).
+  return async function notify({ kind, ref, level = 'info', title, body, exclude = [], when = null }) {
     const { db } = env;
     const now = deps.now();
-    const statements = [sql(db, `INSERT INTO notifications (kind, ref, level, title, body, at) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (kind, ref) DO NOTHING`, kind, ref, level, title, body, now)];
+    const cond = when?.sql ?? '1';
+    const binds = when?.binds ?? [];
+    const statements = [sql(db, `INSERT INTO notifications (kind, ref, level, title, body, at) SELECT ?, ?, ?, ?, ?, ? WHERE ${cond}
+      ON CONFLICT (kind, ref) DO NOTHING`, kind, ref, level, title, body, now, ...binds)];
     const payload = JSON.stringify({ kind, level, title, body });
     const declared = String((await one(db, `SELECT value FROM settings WHERE key = 'notify_channels'`).catch(() => null))?.value ?? '')
       .split(',').filter((c) => ['discord', 'push'].includes(c));
@@ -116,9 +120,9 @@ export function createNotifier(env, deps) {
       if (channel === 'discord' && discordConfigured(env) && !discordUrl(env, route)) continue;
       statements.push(channel === 'push'
         ? sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) SELECT 'push', ?, ?, ?, NULL
-            WHERE EXISTS (SELECT 1 FROM push_subscriptions WHERE expired_at IS NULL) ON CONFLICT (dedupe) DO NOTHING`, `push:${kind}:${ref}`, payload, now)
-        : sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now, channel === 'discord' ? route : null));
+            WHERE EXISTS (SELECT 1 FROM push_subscriptions WHERE expired_at IS NULL) AND ${cond} ON CONFLICT (dedupe) DO NOTHING`, `push:${kind}:${ref}`, payload, now, ...binds)
+        : sql(db, `INSERT INTO outbox (channel, dedupe, payload, at, route) SELECT ?, ?, ?, ?, ? WHERE ${cond}
+            ON CONFLICT (dedupe) DO NOTHING`, channel, `${channel}:${kind}:${ref}`, payload, now, channel === 'discord' ? route : null, ...binds));
     }
     await batch(db, statements);
   };
@@ -216,6 +220,14 @@ export function errorCode(error) {
 // cet envoi est toujours le sien (même tentative, ligne non clôturée) : une réponse tardive ne
 // change ni la ligne ni la santé du canal.
 const SAME_ATTEMPT = (status) => `EXISTS (SELECT 1 FROM outbox WHERE id = ? AND status = '${status}' AND attempts = ? AND closed_at IS NULL)`;
+// Tentatives d'appareil (push) dont dépend une écriture de santé ou d'incident : au moins l'une doit
+// être encore la dernière de son appareil, vérifié dans la même transaction que l'écriture (un essai
+// plus récent depuis STUDIO, ou un autre envoi, a sinon le dernier mot). Liste vide (Discord,
+// e-mails, échec avant tout appel au service) : aucune condition.
+const deviceGuard = (devices) => (devices?.length
+  ? { sql: `EXISTS (SELECT 1 FROM push_subscriptions WHERE ${devices.map(() => '(endpoint = ? AND attempt_seq = ?)').join(' OR ')})`,
+    binds: devices.flatMap((d) => [d.endpoint, d.attempt]) }
+  : { sql: '1', binds: [] });
 async function destinationOf(env, row) {
   if (row.channel === 'push') return { id: 'iphone', label: 'iPhone' };
   if (row.channel === 'email') return { id: 'resend', label: 'Resend' };
@@ -223,27 +235,35 @@ async function destinationOf(env, row) {
   try { kind = JSON.parse(row.payload)?.kind ?? null; } catch { kind = null; }
   return discordDestination(env, row.route ?? discordRoute(kind));
 }
-const destinationFailing = (db, row, dest, attempts, code, now) => sql(db, `INSERT INTO delivery_health (channel, destination, label, state, since, failures, last_error)
-  SELECT ?, ?, ?, 'failing', ?, 1, ? WHERE ${SAME_ATTEMPT('dead')}
+const destinationFailing = (db, row, dest, attempts, code, now, devices = []) => {
+  const current = deviceGuard(devices);
+  return sql(db, `INSERT INTO delivery_health (channel, destination, label, state, since, failures, last_error)
+  SELECT ?, ?, ?, 'failing', ?, 1, ? WHERE ${SAME_ATTEMPT('dead')} AND ${current.sql}
   ON CONFLICT (channel, destination) DO UPDATE SET
     failures = CASE WHEN delivery_health.state = 'failing' THEN delivery_health.failures + 1 ELSE 1 END,
     since = CASE WHEN delivery_health.state = 'failing' THEN delivery_health.since ELSE excluded.since END,
     alerted_at = CASE WHEN delivery_health.state = 'failing' THEN delivery_health.alerted_at ELSE NULL END,
     state = 'failing', last_error = excluded.last_error, label = excluded.label
-  RETURNING since, alerted_at, failures`, row.channel, dest.id, dest.label, now, code, row.id, attempts);
-const destinationOk = (db, channel, dest, now, guard = null) => sql(db, `INSERT INTO delivery_health (channel, destination, label, state, since, last_ok_at)
-  SELECT ?, ?, ?, 'ok', ?, ? WHERE ${guard ? SAME_ATTEMPT('sent') : '1'}
+  RETURNING since, alerted_at, failures`, row.channel, dest.id, dest.label, now, code, row.id, attempts, ...current.binds);
+};
+const destinationOk = (db, channel, dest, now, guard = null, devices = []) => {
+  const current = deviceGuard(devices);
+  return sql(db, `INSERT INTO delivery_health (channel, destination, label, state, since, last_ok_at)
+  SELECT ?, ?, ?, 'ok', ?, ? WHERE ${guard ? SAME_ATTEMPT('sent') : '1'} AND ${current.sql}
   ON CONFLICT (channel, destination) DO UPDATE SET
     since = CASE WHEN delivery_health.state = 'failing' THEN excluded.since ELSE delivery_health.since END,
     failures = CASE WHEN delivery_health.state = 'failing' THEN 0 ELSE delivery_health.failures END,
-    state = 'ok', last_ok_at = excluded.last_ok_at, label = excluded.label`, channel, dest.id, dest.label, now, now, ...(guard ? [guard.id, guard.attempts] : []));
+    state = 'ok', last_ok_at = excluded.last_ok_at, label = excluded.label`, channel, dest.id, dest.label, now, now,
+  ...(guard ? [guard.id, guard.attempts] : []), ...current.binds);
+};
 // Alertes résolues : celles de cette destination (Discord) ou du canal (iPhone, e-mails : une seule
 // destination) ; anciennes références Discord sans destination (avant 0010) au premier succès Discord.
-const resolveAlerts = (db, channel, dest, now, guard = null) => {
+const resolveAlerts = (db, channel, dest, now, guard = null, devices = []) => {
   const [from, to] = channel === 'discord' ? [`discord:${dest.id}:`, `discord:${dest.id};`] : [`${channel}:`, `${channel};`];
+  const current = deviceGuard(devices);
   return sql(db, `UPDATE notifications SET resolved_at = ? WHERE kind = 'channel_failure' AND resolved_at IS NULL
-    AND ((ref >= ? AND ref < ?) OR (? = 'discord' AND ref >= 'discord:0' AND ref < 'discord::')) ${guard ? `AND ${SAME_ATTEMPT('sent')}` : ''}`,
-  now, from, to, channel, ...(guard ? [guard.id, guard.attempts] : []));
+    AND ((ref >= ? AND ref < ?) OR (? = 'discord' AND ref >= 'discord:0' AND ref < 'discord::')) ${guard ? `AND ${SAME_ATTEMPT('sent')}` : ''}
+    AND ${current.sql}`, now, from, to, channel, ...(guard ? [guard.id, guard.attempts] : []), ...current.binds);
 };
 // État du canal = agrégat de ses destinations ACTIVES (une destination Discord retirée garde son
 // historique mais ne compte plus). Toujours une ligne, même si aucune destination n'est active.
@@ -256,9 +276,10 @@ const channelAggregate = (db, channel) => sql(db, `INSERT INTO channel_health (c
   FROM delivery_health WHERE channel = ? AND retired_at IS NULL
   ON CONFLICT (channel) DO UPDATE SET state = excluded.state, since = excluded.since, failures = excluded.failures,
     last_error = excluded.last_error, alerted_at = excluded.alerted_at, last_ok_at = excluded.last_ok_at`, channel, channel, channel, channel, channel);
-// Envoi réussi hors file (essai depuis STUDIO) : destination rétablie, alerte résolue.
-export const channelRecovered = (db, channel, now, dest = { id: channel === 'push' ? 'iphone' : 'resend', label: channel === 'push' ? 'iPhone' : 'Resend' }) => [
-  destinationOk(db, channel, dest, now), resolveAlerts(db, channel, dest, now), channelAggregate(db, channel)];
+// Envoi réussi hors file (essai depuis STUDIO) : destination rétablie, alerte résolue, seulement si
+// l'une des tentatives acceptées (`devices`) est encore la dernière de son appareil à cet instant.
+export const channelRecovered = (db, channel, now, dest = { id: channel === 'push' ? 'iphone' : 'resend', label: channel === 'push' ? 'iPhone' : 'Resend' },
+  devices = []) => [destinationOk(db, channel, dest, now, null, devices), resolveAlerts(db, channel, dest, now, null, devices), channelAggregate(db, channel)];
 // Résultat arrivé après la clôture de la ligne (ou après la reprise du bail par un autre envoi) :
 // gardé pour l'historique, sans rouvrir la ligne ni toucher à la santé du canal.
 const recordLate = (db, id, attempts, note, providerRef = null) => sql(db, `UPDATE outbox SET last_error = ?, provider_ref = COALESCE(provider_ref, ?)
@@ -269,20 +290,26 @@ function parisWhen(t) {
   return `${c.date.slice(8, 10)}/${c.date.slice(5, 7)} à ${String(c.hour).padStart(2, '0')} h ${String(c.minute).padStart(2, '0')}`;
 }
 
-async function alertChannel(env, deps, channel, dest, health, code, now) {
+async function alertChannel(env, deps, channel, dest, health, code, now, devices = []) {
   const { db } = env;
   if (!health || (health.alerted_at !== null && health.alerted_at > now - ALERT_REPEAT)) return;
+  const current = deviceGuard(devices);
   const claimed = await batch(db, [sql(db, `UPDATE delivery_health SET alerted_at = ? WHERE channel = ? AND destination = ? AND state = 'failing'
-    AND retired_at IS NULL AND (alerted_at IS NULL OR alerted_at <= ?)`, now, channel, dest.id, now - ALERT_REPEAT), channelAggregate(db, channel)]);
+    AND retired_at IS NULL AND (alerted_at IS NULL OR alerted_at <= ?) AND ${current.sql}`, now, channel, dest.id, now - ALERT_REPEAT, ...current.binds),
+  channelAggregate(db, channel)]);
   if (!claimed[0].meta.changes) return;
   const again = health.alerted_at !== null;
   // Jamais par la destination en panne : pour Discord, l'alerte part par le salon « alertes » seulement
   // s'il passe par un autre webhook ; pour l'iPhone et les e-mails, jamais par le même canal.
   const exclude = channel !== 'discord' ? [channel] : (await discordDestination(env, discordRoute('channel_failure'))).id === dest.id ? ['discord'] : [];
+  // Incident créé seulement si, au moment même de l'écrire, la destination est toujours en panne et
+  // la tentative en cause toujours la dernière de son appareil (un essai réussi entre-temps l'empêche).
   await deps.notify({ kind: 'channel_failure', ref: `${channel}:${dest.id}:${health.since}${again ? `:${now}` : ''}`, level: 'critical',
     title: `${CHANNEL_TITLES[channel] ?? channel}${channel === 'discord' ? ` (${dest.label})` : ''} ${again ? 'toujours ' : ''}en échec`,
     body: `${health.failures} message(s) non remis depuis le ${parisWhen(health.since)}. Cause : ${explainCode(code)}. `
-      + (CHANNEL_HINTS[channel] ?? 'Les messages restent dans STUDIO. Diagnostic et essai : Santé du site et historique.'), exclude });
+      + (CHANNEL_HINTS[channel] ?? 'Les messages restent dans STUDIO. Diagnostic et essai : Santé du site et historique.'), exclude,
+    when: { sql: `EXISTS (SELECT 1 FROM delivery_health WHERE channel = ? AND destination = ? AND state = 'failing' AND retired_at IS NULL) AND ${current.sql}`,
+      binds: [channel, dest.id, ...current.binds] } });
 }
 
 // Abonnements iPhone expirés pendant un envoi : une notice (jamais par l'iPhone) pour réactiver.
@@ -361,11 +388,12 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
         { ...row, attempts, envelope: email ? JSON.parse(envelope) : null });
       const ref = typeof receipt?.id === 'string' ? receipt.id : null;
       const guard = { id: row.id, attempts };
-      // Push remis mais dépassé sur l'appareil par une tentative plus récente (essai depuis STUDIO) :
-      // message noté remis, sans déclarer le canal rétabli à la place du dernier résultat.
-      const recovers = !(row.channel === 'push' && receipt?.current === 0);
+      // Push : message noté remis dans tous les cas (vérité de ce message) ; canal rétabli et incident
+      // résolu seulement si l'une des tentatives acceptées est encore la dernière de son appareil, au
+      // moment de ce lot (sinon un essai plus récent, peut-être refusé, a le dernier mot).
+      const devices = row.channel === 'push' ? (receipt?.deviceAttempts ?? []) : [];
       const done = await batch(db, [sql(db, `UPDATE outbox SET status = 'sent', provider_ref = ?, last_error = NULL ${mine}`, ref, row.id, attempts),
-        ...(recovers ? [destinationOk(db, row.channel, dest, now, guard), resolveAlerts(db, row.channel, dest, now, guard), channelAggregate(db, row.channel)] : [])]);
+        destinationOk(db, row.channel, dest, now, guard, devices), resolveAlerts(db, row.channel, dest, now, guard, devices), channelAggregate(db, row.channel)]);
       if (done[0].meta.changes) sent += 1;
       else await batch(db, [recordLate(db, row.id, attempts, 'remis_apres_cloture', ref)]);
       await noticeExpired(deps, receipt);
@@ -390,14 +418,17 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
       // Refus à corriger (permanent : clé, en-tête, webhook supprimé) : abandon sans réessais inutiles.
       const wait = Number.isInteger(error?.retryAfter) ? error.retryAfter : null;
       const dead = uncertain === null && wait === null && (attempts >= maxAttempts || (!email && error?.permanent === true));
+      // Push : message noté échoué dans tous les cas ; destination en panne et incident seulement si
+      // l'une des tentatives refusées est encore la dernière de son appareil (vérifié dans le lot).
+      const devices = row.channel === 'push' ? (error?.deviceAttempts ?? []) : [];
       const written = await batch(db, [sql(db, `UPDATE outbox SET status = ?, next_at = ?, uncertain_since = ?, last_error = ?, attempts = attempts - ? ${mine}`,
         dead ? 'dead' : 'pending', now + (wait ?? Math.min(60 * 2 ** attempts, 3600)), uncertain, code, wait === null ? 0 : 1, row.id, attempts),
-      ...(dead ? [destinationFailing(db, row, dest, attempts, code, now), channelAggregate(db, row.channel)] : [])]);
+      ...(dead ? [destinationFailing(db, row, dest, attempts, code, now, devices), channelAggregate(db, row.channel)] : [])]);
       if (!written[0].meta.changes) {
         await batch(db, [recordLate(db, row.id, attempts, `apres_cloture:${code}`)]);
         continue;
       }
-      if (dead && !isMetaAlert(row)) await alertChannel(env, deps, row.channel, dest, written[1]?.results?.[0] ?? null, code, now);
+      if (dead && !isMetaAlert(row)) await alertChannel(env, deps, row.channel, dest, written[1]?.results?.[0] ?? null, code, now, devices);
       await noticeExpired(deps, error);
     }
   }

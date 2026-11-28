@@ -395,3 +395,164 @@ test('N26 vrai Wrangler local : base 0010 peuplée, 0011 appliquée, onze migrat
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ---------- Apple : en-têtes (refus 400 BadWebPushTopic constaté le 28 novembre) ----------
+
+// Service Apple simulé, strict : règles documentées par Apple (TTL, Urgency, Topic, chiffrement,
+// jeton VAPID) et, pour Topic, un texte que l'on peut décoder en base64url (constaté : « push_test »,
+// 9 caractères, refusé ; « daily_report », 12 caractères, accepté le 28 novembre à 10 h).
+function appleStrict(publicKey, clock) {
+  const seen = [];
+  const refuse = (status, reason) => new Response(JSON.stringify({ reason }), { status });
+  const transport = async (url, init) => {
+    const h = init.headers;
+    seen.push({ topic: h.Topic, urgency: h.Urgency, ttl: h.TTL });
+    if (h.Topic !== undefined && !(/^[A-Za-z0-9_-]{1,32}$/.test(h.Topic) && h.Topic.length % 4 !== 1)) return refuse(400, 'BadWebPushTopic');
+    if (!/^[1-9]\d*$/.test(String(h.TTL))) return refuse(400, 'BadTtl');
+    if (h.Urgency !== undefined && !['very-low', 'low', 'normal', 'high'].includes(h.Urgency)) return refuse(400, 'BadUrgency');
+    if (h['Content-Encoding'] !== 'aes128gcm' || !init.body?.length) return refuse(400, 'BadWebPushRequest');
+    if (init.body.length > 4096) return refuse(413, 'PayloadTooLarge');
+    const auth = /^vapid t=([\w-]+)\.([\w-]+)\.([\w-]+), k=([\w-]+)$/.exec(h.Authorization ?? '');
+    if (!auth) return refuse(403, 'BadAuthorizationHeader');
+    if (auth[4] !== publicKey) return refuse(403, 'VapidPkHashMismatch');
+    const claims = JSON.parse(Buffer.from(auth[2], 'base64url'));
+    const pub = await crypto.subtle.importKey('raw', Buffer.from(publicKey, 'base64url'), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+    const signed = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, Buffer.from(auth[3], 'base64url'), new TextEncoder().encode(`${auth[1]}.${auth[2]}`));
+    const now = clock();
+    if (!signed || claims.aud !== new URL(url).origin || !/^(https:\/\/|mailto:)\S+$/.test(claims.sub) || !(claims.exp > now && claims.exp <= now + 86400)) {
+      return refuse(403, 'BadJwtToken');
+    }
+    return new Response(null, { status: 201 });
+  };
+  return { transport, seen };
+}
+// Types de notification envoyés aux appareils (relevés dans le backend), plus l'essai manuel.
+const KINDS = ['address_out_of_zone', 'backup_failed', 'backup_not_configured', 'channel_failure', 'contact_not_sealed', 'daily_report', 'dispute',
+  'drop_sold_out', 'email_uncertain', 'legacy_link_review', 'legacy_link_sale', 'legacy_link_without_stock', 'low_stock', 'mail_intent_stuck', 'order_paid',
+  'paid_without_stock', 'parcel_not_collected', 'payment_failed', 'payment_mismatch', 'push_device_expired', 'refund', 'size_sold_out',
+  'studio_codes_regenerated', 'studio_counter_regressed', 'studio_passkey_added', 'studio_recovery_used', 'technical', 'terms_integrity', 'unknown_refund',
+  'unknown_session'];
+
+test('N27 Apple strict simulé : essai manuel et trente types de notification automatique partent sans Topic et sont acceptés ; l’ancien Topic « push_test » serait refusé', async () => {
+  const b = await studio();
+  await b.enroll();
+  Object.assign(b.env, await vapidKeys());
+  b.deps.channels = ['push'];
+  await addDevice(b.real, b.clock.now());
+  const apple = appleStrict(b.env.VAPID_PUBLIC_KEY, () => b.clock.now());
+  b.deps.transport = apple.transport;
+  // Le simulateur reproduit ce qui a été observé : l'ancien Topic de l'essai est refusé.
+  const probe = async (topic) => (await apple.transport(ENDPOINT, { headers: { Topic: topic, TTL: '86400', 'Content-Encoding': 'aes128gcm' }, body: new Uint8Array(1) })).status;
+  assert.deepEqual([await probe('push_test'), await probe('technical'), await probe('a'.repeat(33))], [400, 400, 400]);
+  apple.seen.length = 0;
+  const manual = await b.call('POST', '/api/admin/push/test', { endpoint: ENDPOINT });
+  assert.deepEqual([manual.body.devices[0].status, manual.body.devices[0].result], [201, 'ok'], 'essai manuel accepté');
+  const notify = notifier(b);
+  for (const kind of KINDS) await notify(kind, `n27-${kind}`);
+  for (let i = 0; i < 4; i += 1) await deliver(b, { limit: 50 });
+  assert.deepEqual(await b.rows("SELECT status, COUNT(*) AS n FROM outbox WHERE channel = 'push' GROUP BY status"), [{ status: 'sent', n: KINDS.length }],
+    'chaque notification automatique acceptée');
+  assert.equal(apple.seen.length, KINDS.length + 1);
+  assert.ok(apple.seen.every((s) => s.topic === undefined), 'aucun en-tête Topic, ni pour l’essai ni pour les envois automatiques');
+  assert.ok(apple.seen.every((s) => s.ttl === '86400' && ['normal', 'high'].includes(s.urgency)));
+  assert.deepEqual(await b.rows('SELECT last_status, last_error FROM push_subscriptions'), [{ last_status: 201, last_error: null }]);
+});
+
+// ---------- P3-R1 : santé du canal liée à la tentative de l'appareil ----------
+
+const failingPush = (b, now) => b.real.batch([
+  b.real.prepare(`INSERT INTO channel_health (channel, state, since, failures, last_error) VALUES ('push', 'failing', ?, 2, 'apple_403_BadJwtToken')`).bind(now - 600),
+  b.real.prepare(`INSERT INTO delivery_health (channel, destination, label, state, since, failures, last_error) VALUES ('push', 'iphone', 'iPhone', 'failing', ?, 2, 'apple_403_BadJwtToken')`).bind(now - 600),
+  b.real.prepare(`INSERT INTO notifications (kind, ref, level, title, body, at) VALUES ('channel_failure', ?, 'critical', 'Notifications iPhone en échec', 'Recette', ?)`).bind(`push:iphone:${now - 600}`, now - 600)]);
+const channel = (b) => b.count("SELECT state FROM channel_health WHERE channel = 'push'");
+const openIncidents = (b) => b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'channel_failure' AND resolved_at IS NULL");
+
+test('N28 deux appareils : une remise encore à jour rétablit le canal ; une remise dépassée par un essai refusé ne le rétablit pas ; message toujours noté remis', async () => {
+  const b = await studio();
+  await b.enroll();
+  Object.assign(b.env, await vapidKeys());
+  b.deps.channels = ['push'];
+  const SECOND = `${ENDPOINT}-deuxieme`;
+  await addDevice(b.real, b.clock.now());
+  await addDevice(b.real, b.clock.now() + 1, SECOND);
+  await failingPush(b, b.clock.now());
+  const net = scripted(b);
+  // Premier appareil accepté, second refusé : remis à au moins un appareil, tentative à jour.
+  net.now(201);
+  net.now(403, 'BadJwtToken');
+  await notifier(b)('order_paid', 'deux-1');
+  await deliver(b);
+  assert.equal(await b.count("SELECT status FROM outbox WHERE dedupe = 'push:order_paid:deux-1'"), 'sent');
+  assert.deepEqual([await channel(b), await openIncidents(b)], ['ok', 0], 'remise à jour : canal rétabli, incident résolu');
+  // Le canal retombe ; nouvel envoi : premier appareil retenu (201), essai manuel refusé sur lui
+  // entre-temps, puis second appareil refusé. Message remis (premier appareil), canal pas rétabli.
+  await b.real.batch([b.real.prepare(`UPDATE delivery_health SET state = 'failing' WHERE channel = 'push'`),
+    b.real.prepare(`UPDATE channel_health SET state = 'failing' WHERE channel = 'push'`),
+    b.real.prepare(`UPDATE notifications SET resolved_at = NULL WHERE kind = 'channel_failure'`)]);
+  b.clock.t += 60;
+  const held = net.held(201);
+  net.now(403, 'BadJwtToken'); // essai manuel sur le premier appareil
+  net.now(403, 'BadJwtToken'); // second appareil de l'envoi automatique
+  await notifier(b)('order_paid', 'deux-2');
+  const cron = deliver(b);
+  await held.entered;
+  assert.equal((await b.call('POST', '/api/admin/push/test', { endpoint: ENDPOINT })).body.devices[0].status, 403);
+  held.release();
+  await cron;
+  assert.equal(await b.count("SELECT status FROM outbox WHERE dedupe = 'push:order_paid:deux-2'"), 'sent', 'remis au premier appareil : vérité du message');
+  assert.deepEqual(await b.rows('SELECT last_status FROM push_subscriptions ORDER BY created_at'), [{ last_status: 403 }, { last_status: 403 }]);
+  assert.equal(await channel(b), 'failing', 'remise dépassée : le canal n’est pas déclaré rétabli');
+  assert.equal(await openIncidents(b), 1, 'incident toujours ouvert');
+});
+
+test('N29 deux essais manuels : un ancien succès arrivé après un refus plus récent ne rétablit pas le canal ; dans l’ordre inverse, le succès récent le rétablit', async () => {
+  const b = await studio();
+  await b.enroll();
+  Object.assign(b.env, await vapidKeys());
+  await addDevice(b.real, b.clock.now());
+  await failingPush(b, b.clock.now());
+  const net = scripted(b);
+  const test = () => b.call('POST', '/api/admin/push/test', { endpoint: ENDPOINT });
+  let held = net.held(201);
+  net.now(403, 'BadJwtToken');
+  let slow = test();
+  await held.entered;
+  assert.equal((await test()).body.devices[0].status, 403);
+  held.release();
+  assert.equal((await slow).body.devices[0].current, false);
+  assert.deepEqual([await channel(b), await openIncidents(b)], ['failing', 1], 'ancien succès : ni rétablissement ni incident résolu');
+  held = net.held(403, 'BadJwtToken');
+  net.now(201);
+  slow = test();
+  await held.entered;
+  assert.equal((await test()).body.devices[0].current, true);
+  held.release();
+  await slow;
+  assert.deepEqual([await channel(b), await openIncidents(b)], ['ok', 0], 'succès le plus récent : canal rétabli');
+});
+
+test('N30 aucun incident créé pour une panne déjà finie : un essai accepté entre l’échec et l’écriture de l’incident l’empêche ; message toujours noté échoué', async () => {
+  const b = await studio();
+  await b.enroll();
+  Object.assign(b.env, await vapidKeys());
+  b.deps.channels = ['push'];
+  await addDevice(b.real, b.clock.now());
+  const net = scripted(b);
+  net.now(403, 'BadJwtToken'); // envoi automatique refusé
+  net.now(201); // essai manuel accepté pendant l'écriture de l'incident
+  await notifier(b)('order_paid', 'incident-perime');
+  // Seul lot de notification pendant l'envoi : l'incident de la panne. L'essai s'intercale juste avant.
+  let injected = false;
+  b.env.DB.state.beforeBatch = async (statements) => {
+    if (injected || !statements.some((s) => s.includes('INSERT INTO notifications'))) return false;
+    injected = true;
+    b.env.DB.state.beforeBatch = null;
+    assert.equal((await b.call('POST', '/api/admin/push/test', { endpoint: ENDPOINT })).body.devices[0].status, 201);
+    return true;
+  };
+  await deliver(b);
+  assert.equal(injected, true, 'essai intercalé juste avant l’écriture de l’incident');
+  assert.equal(await b.count("SELECT status FROM outbox WHERE dedupe = 'push:order_paid:incident-perime'"), 'dead', 'le message a réellement échoué');
+  assert.deepEqual([await channel(b), await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'channel_failure'")], ['ok', 0],
+    'panne finie avant l’écriture : aucun incident');
+});

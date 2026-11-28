@@ -27,6 +27,7 @@
     "test:review:risks": "node --test tests/review/v14-open-issues.test.mjs",
     "test:review:push": "node --test tests/review/push-integrity.test.mjs tests/review/push-deployment.test.mjs tests/review/push-open-issues.test.mjs",
     "test:review:push2": "node --test tests/review/push-second-integrity.test.mjs tests/review/push-second-migrations.test.mjs tests/review/push-second-open-issues.test.mjs",
+    "test:review:push3": "node --test tests/review/push-third-integrity.test.mjs tests/review/push-third-open-issues.test.mjs",
     "test:review:d1": "node --test tests/review/d1-delivery-observability.test.mjs"
   },
   "dependencies": {

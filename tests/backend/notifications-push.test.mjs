@@ -214,7 +214,9 @@ test('N05 jeton VAPID conforme à Apple : réutilisé au moins une heure, valabl
     assert.match(claims.sub, /^(https:\/\/|mailto:)\S+$/);
     assert.ok(claims.exp - calls[i].at <= 86400 && claims.exp > calls[i].at, 'expiration à moins d’un jour');
     assert.ok(Number(calls[i].headers.TTL) > 0 && ['very-low', 'low', 'normal', 'high'].includes(calls[i].headers.Urgency));
-    assert.match(calls[i].headers.Topic, /^[A-Za-z0-9_-]{1,32}$/);
+    // Avant le 28 novembre, ce test ne contrôlait que l'alphabet et la longueur du Topic : il laissait
+    // passer « push_test », refusé par Apple (400 BadWebPushTopic). Aucun Topic n'est plus envoyé.
+    assert.equal(calls[i].headers.Topic, undefined, 'aucun en-tête Topic');
     assert.equal(calls[i].headers['Content-Encoding'], 'aes128gcm');
   }
   const direct = await vapidAuthorization(b.env, SECRET_ENDPOINT, b.clock.now() + 60);

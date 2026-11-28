@@ -5,7 +5,7 @@
 // Clés : VAPID_PUBLIC_KEY (publique), VAPID_PRIVATE_KEY (secrète, saisie dans Cloudflare),
 // VAPID_SUBJECT (mailto: ou https:). Les messages ne contiennent jamais de donnée personnelle.
 // Exigences d'Apple (documentation « Sending web push notifications in web apps and browsers ») :
-// en-têtes TTL, Urgency et Topic valides, jeton VAPID d'au plus un jour, renouvelé au plus une fois
+// en-têtes TTL et Urgency valides, jeton VAPID d'au plus un jour, renouvelé au plus une fois
 // par heure, clé publique identique à celle de l'abonnement ; réponse 201 si accepté, sinon un code
 // HTTP et une raison (« reason ») gardés pour le diagnostic. Aucune adresse d'abonnement ni clé n'est
 // jamais affichée ou journalisée : seulement le service (apple…), le code et une empreinte courte.
@@ -250,6 +250,16 @@ async function readReason(response) {
   }
 }
 
+// En-têtes d'un envoi (RFC 8030, exigences d'Apple). Aucun en-tête Topic : il est facultatif, il
+// ferait remplacer par le service une notification non encore remise par la suivante du même type
+// (deux commandes hors connexion : une seule arrivée), et Apple refuse (400 BadWebPushTopic) un Topic
+// que nous formions à partir du type (« push_test » : 9 caractères, qu'aucun encodage base64url ne
+// peut produire). Le remplacement à l'écran reste réglé par le service worker.
+export function pushHeaders(authorization, message) {
+  return { Authorization: authorization, TTL: '86400', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream',
+    Urgency: message?.level === 'critical' ? 'high' : 'normal' };
+}
+
 // Un envoi vers un appareil. Ne lève que si le budget de l'invocation est épuisé (la suite attend).
 // Tentative réservée sur l'appareil juste avant l'appel au service (numéro attempt_seq, et identifiant
 // d'essai s'il s'agit d'un essai depuis STUDIO) : son résultat ne sera écrit que si aucun envoi plus
@@ -283,12 +293,7 @@ async function sendToDevice(env, transport, sub, message, now) {
   }
   let response;
   try {
-    response = await transport(sub.endpoint, {
-      method: 'POST', signal: AbortSignal.timeout(8000),
-      headers: { Authorization: authorization, TTL: '86400', 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream',
-        Urgency: message.level === 'critical' ? 'high' : 'normal', Topic: String(message.kind ?? 'studio').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'studio' },
-      body,
-    });
+    response = await transport(sub.endpoint, { method: 'POST', signal: AbortSignal.timeout(8000), headers: pushHeaders(authorization, message), body });
   } catch (error) {
     if (error?.code === 'budget_exhausted') throw error;
     return done('transient', { code: error?.name === 'TimeoutError' ? 'delai' : 'reseau', attempt });
@@ -343,27 +348,36 @@ export async function sendToDevices(env, transport, message, now, { endpoint = n
   return results;
 }
 
+// Identités des tentatives dont un résultat dépend (appareil, numéro de tentative) : la file les
+// revérifie dans la base au moment d'écrire la santé du canal ou un incident. Jamais journalisées.
+export const attemptsOf = (results) => results.filter((r) => r.attempt !== null).map((r) => ({ endpoint: r.endpoint, attempt: r.attempt }));
+
 // Expéditeur de la file : remis si au moins un appareil a accepté. Aucun appareil actif (jamais
 // abonné, ou tous expirés) : `noDevice`, ce n'est pas une panne et rien n'est réessayé. Sinon
 // l'erreur porte le code du premier échec, passager (réessai, Retry-After respecté) ou à corriger.
-// `current` : remises qui sont aussi le dernier résultat de leur appareil ; à zéro, la file note le
-// message comme remis sans déclarer le canal rétabli (un essai plus récent a eu le dernier mot).
+// `deviceAttempts` (remise ou échec) : tentatives des appareils concernés ; la santé du canal ne
+// change que si l'une d'elles est encore la dernière de son appareil (un essai plus récent depuis
+// STUDIO, ou un autre envoi, a sinon le dernier mot). `current` : remises encore à jour (information).
 export function pushSender(env, transport = fetch, clock = () => Math.floor(Date.now() / 1000)) {
   return async (message) => {
     const results = await sendToDevices(env, transport, message, clock());
     const expired = results.filter((r) => r.result === 'expired' || r.result === 'mismatch');
     const notice = { expired: await Promise.all(expired.filter((r) => r.applied).map(async (r) => ({ fp: await fingerprint(r.endpoint), label: r.label, code: r.code }))) };
     const delivered = results.filter((r) => r.result === 'ok');
-    if (delivered.length) return { id: null, delivered: delivered.length, current: delivered.filter((r) => r.applied).length, devices: results.length, ...notice };
+    if (delivered.length) {
+      return { id: null, delivered: delivered.length, current: delivered.filter((r) => r.applied).length, devices: results.length,
+        deviceAttempts: attemptsOf(delivered), ...notice };
+    }
     if (!results.length || expired.length === results.length) {
       throw new PushError('aucun_appareil', { noDevice: true, detail: expired[0]?.code ?? null, ...notice });
     }
+    const failing = results.filter((r) => r.result === 'transient' || r.result === 'permanent');
     const transient = results.filter((r) => r.result === 'transient');
     if (transient.length) {
       const waits = transient.map((r) => r.retryAfter).filter((w) => w !== null);
-      throw new PushError(transient[0].code, { retryAfter: waits.length ? Math.max(...waits) : undefined, ...notice });
+      throw new PushError(transient[0].code, { retryAfter: waits.length ? Math.max(...waits) : undefined, deviceAttempts: attemptsOf(failing), ...notice });
     }
-    throw new PushError(results.find((r) => r.result === 'permanent').code, { permanent: true, ...notice });
+    throw new PushError(results.find((r) => r.result === 'permanent').code, { permanent: true, deviceAttempts: attemptsOf(failing), ...notice });
   };
 }
 

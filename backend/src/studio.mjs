@@ -12,7 +12,7 @@ import { legacyReviewText, recordLegacyLinkSale } from './payments.mjs';
 import { channelRecovered, configuredChannels, deliverOutbox, discordRouting, emailLabel, parisClock, reconcileDiscordDestinations, reconcileEmail } from './notify.mjs';
 import { emailReady } from './email.mjs';
 import { intentStatement, pendingIntents, processMailIntents } from './intents.mjs';
-import { explainCode, fingerprint, pushReady, sendToDevices, validSubscription, vapidSelfCheck } from './push.mjs';
+import { attemptsOf, explainCode, fingerprint, pushReady, sendToDevices, validSubscription, vapidSelfCheck } from './push.mjs';
 import { listBackups } from './backup.mjs';
 import { COST, fits } from './budget.mjs';
 
@@ -538,7 +538,10 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         explanation: `${r.result === 'ok' ? 'Accepté par le service de notification : la notification doit apparaître dans quelques secondes.' : explainCode(r.code)}${
           r.applied || r.local ? '' : ' Un essai plus récent a eu lieu entre-temps : c’est lui qui compte dans Santé du site.'}` })));
       const summary = results.map((r) => r.code ?? 'ok').join(',').slice(0, 120) || (self.keypair ? 'aucun_appareil' : 'vapid_cle_invalide');
-      await batch(ctx.db, [...(results.some((r) => r.result === 'ok' && r.applied) ? channelRecovered(ctx.db, 'push', now) : []),
+      // Canal rétabli seulement si une tentative acceptée est encore la dernière de son appareil au
+      // moment de ce lot (vérifié par la base, pas d'après `applied` lu plus tôt).
+      const accepted = attemptsOf(results.filter((r) => r.result === 'ok'));
+      await batch(ctx.db, [...(accepted.length ? channelRecovered(ctx.db, 'push', now, undefined, accepted) : []),
         audit(ctx.db, now, 'fondateur', 'push_test', `${results.length} appareil(s)`, summary)]);
       return json({ keys: { subject: self.subject, keypair: self.keypair, key_fp: self.key_fp }, devices,
         this_device: endpoint ? (results.length ? 'known' : 'unknown') : null });
