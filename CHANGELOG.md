@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## 2026-11-28 — Work : second contre-audit push 56d960b
+
+- Cinq anciennes anomalies corrigées dans les scénarios initiaux : six anciens critères devenus verts, assertions inchangées. Cascade Apple/Discord simultanément en échec non reproduite.
+- 277 tests existants et 13 contrôles commerciaux réussis ; six nouveaux contrôles d’intégrité, réception et migrations réussis. Quatre nouveaux critères rouges : frontière horaire VAPID, remplacement d’un webhook Discord, expiration concurrente d’abonnement, réponses Apple arrivant dans le désordre.
+- Cryptographie comparée à `@noble/curves@2.3.0` dans une installation isolée : 52 signatures concordantes, huit cas workerd, calcul secret variable observé. Aucune extraction de clé démontrée ; recommandation de remplacer l’arithmétique maison, sans modification du runtime ni des dépendances SAYLESS.
+- Migrations 0009/0010, sauvegarde/restauration et conservation d’accès vérifiées localement. Audits npm 0/0, compilations réussies. Réception physique iPhone, CPU Cloudflare et ancienne erreur du PC Windows non certifiés.
+- Verdict NO GO TEST en l’état ; preuves, limites et corrections attendues dans `docs/CONTRE-AUDIT-PUSH-2-WORK.md`. Aucun déploiement, fusion ou changement de main/v2/boutique publique.
+
 ## 2026-11-28 — Claude : corrections du contre-audit push de Work (R1 à R5)
 
 Demandées par le fondateur le 28 novembre à 1 h 03, après le refus de Work (NO GO) sur `be0bb9b`. Détail : `docs/NOTIFICATIONS-PUSH.md`, sections 3 et 4 ; `docs/AUDIT-V2-CLAUDE.md`, section 15.

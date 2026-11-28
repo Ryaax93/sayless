@@ -1,0 +1,15 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review:v13
+> node --test tests/review/v13-open-issues.test.mjs
+
+✔ V13-B1 : une confirmation e-mail perdue lors de la mise en file est réparée au renvoi du webhook (4384.219435ms)
+✔ V13-B2 : un devis exige un document de CGV archivé, pas seulement une version dans settings (323.851918ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5115.821587

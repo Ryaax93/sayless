@@ -1,0 +1,89 @@
+✖ P2-R1 : un premier JWT émis juste avant une frontière horaire reste réutilisé une heure (37.620708ms)
+ℹ Deux démarrages à froid séparés de 2 secondes : 2 JWT. Aucun jeton journalisé.
+✖ P2-R2 : remplacement effectif du webhook défaillant, diagnostic rétabli et incident historique conservé (3997.362787ms)
+ℹ Après remplacement accepté : agrégat=failing, ancienne destination en échec=1.
+✖ P2-R3 : expiration concurrente à l’enregistrement, aucun faux succès « abonné » (482.37332ms)
+ℹ Expiration pendant l’inscription : subscribed=true, expired=1.
+✖ P2-R4 : une ancienne réponse Apple acceptée ne masque pas le refus d’un essai plus récent (757.62592ms)
+ℹ Dernier essai refusé 403, ancienne réponse 201 tardive : status=201, erreur=null, santé=wait.
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5783.5675
+
+✖ failing tests:
+
+test at tests/review/push-second-open-issues.test.mjs:13:1
+✖ P2-R1 : un premier JWT émis juste avant une frontière horaire reste réutilisé une heure (37.620708ms)
+  AssertionError [ERR_ASSERTION]: Une fenêtre civile ne garantit pas un délai minimal de réutilisation après la première émission.
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-second-open-issues.test.mjs:20:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-second-open-issues.test.mjs:23:1
+✖ P2-R2 : remplacement effectif du webhook défaillant, diagnostic rétabli et incident historique conservé (3997.362787ms)
+  AssertionError [ERR_ASSERTION]: Une destination retirée ne doit pas bloquer indéfiniment la santé des destinations actuelles.
+
+  'failing' !== 'ok'
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-second-open-issues.test.mjs:42:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'failing',
+    expected: 'ok',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-second-open-issues.test.mjs:45:1
+✖ P2-R3 : expiration concurrente à l’enregistrement, aucun faux succès « abonné » (482.37332ms)
+  AssertionError [ERR_ASSERTION]: Le résultat doit refléter la ligne effective, pas la lecture précédant la transaction.
+
+  true !== false
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-second-open-issues.test.mjs:60:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-second-open-issues.test.mjs:63:1
+✖ P2-R4 : une ancienne réponse Apple acceptée ne masque pas le refus d’un essai plus récent (757.62592ms)
+  AssertionError [ERR_ASSERTION]: Les résultats par appareil doivent être liés à leur tentative, comme ceux de la file.
+
+  201 !== 403
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-second-open-issues.test.mjs:87:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 201,
+    expected: 403,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

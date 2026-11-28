@@ -1,0 +1,13 @@
+✔ P2-A1 migrations 0009 + 0010 : données préexistantes identiques, santé reprise, sauvegarde chiffrée restaurable (2147.778573ms)
+✔ P2-A2 migration 0010 interrompue : aucune table ou colonne partiellement ajoutée (320.448001ms)
+✔ P2-A3 message chiffré → service worker → reçu authentifié : accepté distinct de reçu, rejeu refusé (938.118253ms)
+✔ P2-A4 reçu : session/origine/en-tête requis, ancien essai et abonnement expiré refusés (716.214886ms)
+✔ P2-A5 refus d’affichage et coupure réseau : aucun faux accusé de réception (1304.393911ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6132.480779

@@ -1,0 +1,50 @@
+{
+  "node": "v24.22.3",
+  "reference": "@noble/curves@2.3.0",
+  "differential_cases": 52,
+  "invalid_scalars_rejected": 4,
+  "workerd_equal_cases": 8,
+  "secret_inversion_iterations": {
+    "min": 123,
+    "max": 175,
+    "distinct_counts": 29
+  },
+  "interpretation": "Contrôle fonctionnel réussi. La boucle dépend du nonce secret ; ces mesures ne démontrent ni une extraction de clé ni une résistance aux canaux auxiliaires. CPU local seulement.",
+  "timing": {
+    "custom_signature": {
+      "samples": 40,
+      "cpu_median_ms": 0.598,
+      "cpu_p95_ms": 1.092,
+      "wall_median_ms": 0.649,
+      "wall_p95_ms": 0.835
+    },
+    "noble_signature": {
+      "samples": 40,
+      "cpu_median_ms": 0.626,
+      "cpu_p95_ms": 1.032,
+      "wall_median_ms": 0.623,
+      "wall_p95_ms": 0.768
+    },
+    "native_signature": {
+      "samples": 40,
+      "cpu_median_ms": 0.077,
+      "cpu_p95_ms": 0.218,
+      "wall_median_ms": 0.091,
+      "wall_p95_ms": 0.194
+    },
+    "vapid_cache_miss": {
+      "samples": 40,
+      "cpu_median_ms": 0.875,
+      "cpu_p95_ms": 1.685,
+      "wall_median_ms": 0.94,
+      "wall_p95_ms": 1.251
+    },
+    "vapid_cache_hit": {
+      "samples": 40,
+      "cpu_median_ms": 0.003,
+      "cpu_p95_ms": 0.007,
+      "wall_median_ms": 0.003,
+      "wall_p95_ms": 0.006
+    }
+  }
+}
