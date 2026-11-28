@@ -14,6 +14,7 @@ Demandées par le fondateur le 28 novembre à 1 h 03, après le refus de Work (N
 - **Tests :**
   - les six critères de Work (R1a, R1b, R2 à R5) passent, sans aucune modification de ses fichiers ;
   - N11 à N16 ajoutés ; N06, N08 et T04 étendus ;
+  - N11 rendu portable après un premier refus de la CI Windows sur `ed3d8fa` : le chemin du dépôt était donné à esbuild sous forme d'adresse (`/D:/…`) ; assertions inchangées ;
   - CI : contre-audit de Work (`test:review:push`) et test D1 strict (`test:review:d1`) désormais obligatoires sous Linux et Windows.
 - **Non testé :**
   - Apple et Discord réels, simulés dans les tests ;
