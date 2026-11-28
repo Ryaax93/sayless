@@ -24,7 +24,23 @@ async function vapidKeys() {
 }
 async function deviceKeys() {
   const ua = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
-  return { p256dh: b64url(new Uint8Array(await crypto.subtle.exportKey('raw', ua.publicKey))), auth: b64url(crypto.getRandomValues(new Uint8Array(16))) };
+  const keys = { p256dh: b64url(new Uint8Array(await crypto.subtle.exportKey('raw', ua.publicKey))), auth: b64url(crypto.getRandomValues(new Uint8Array(16))) };
+  Object.defineProperty(keys, 'privateKey', { value: ua.privateKey, enumerable: false });
+  return keys;
+}
+// Déchiffrement côté appareil (RFC 8291), comme l'iPhone : prouve ce que contient le message.
+async function openPush(body, keys) {
+  const hkdf = async (salt, ikm, info, n) => new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info },
+    await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']), n * 8));
+  const enc = new TextEncoder();
+  const salt = body.slice(0, 16);
+  const asPublic = body.slice(21, 86);
+  const uaPublic = fromB64url(keys.p256dh);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: await crypto.subtle.importKey('raw', asPublic, { name: 'ECDH', namedCurve: 'P-256' }, false, []) }, keys.privateKey, 256));
+  const ikm = await hkdf(fromB64url(keys.auth), shared, new Uint8Array([...enc.encode('WebPush: info\0'), ...uaPublic, ...asPublic]), 32);
+  const key = await crypto.subtle.importKey('raw', await hkdf(salt, ikm, enc.encode('Content-Encoding: aes128gcm\0'), 16), 'AES-GCM', false, ['decrypt']);
+  const clear = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: await hkdf(salt, ikm, enc.encode('Content-Encoding: nonce\0'), 12) }, key, body.slice(86)));
+  return JSON.parse(new TextDecoder().decode(clear.slice(0, -1)));
 }
 async function addDevice(b, endpoint = SECRET_ENDPOINT) {
   const k = await deviceKeys();
@@ -41,7 +57,7 @@ function simulate(b) {
   b.net = [];
   b.deps.transport = async (url, init) => {
     const host = new URL(url).host;
-    b.net.push({ host, at: b.clock.now(), headers: init.headers, body: typeof init.body === 'string' ? init.body : null });
+    b.net.push({ host, at: b.clock.now(), headers: init.headers, body: init.body });
     const side = host === 'web.push.apple.com' ? b.apple : host === 'discord.com' ? b.discord : null;
     if (!side) throw new Error('hôte inattendu');
     if (side.down) throw new TypeError('Network connection lost');
@@ -213,7 +229,7 @@ async function signedIn() {
   return b;
 }
 
-test('N06 essai manuel depuis STUDIO : réponse d’Apple expliquée, clés contrôlées, aucun secret renvoyé, fréquence limitée', async () => {
+test('N06 essai manuel depuis STUDIO : réponse d’Apple expliquée, accepté ≠ reçu, réception confirmée par l’iPhone, aucun secret, fréquence limitée', async () => {
   const b = await signedIn();
   Object.assign(b.env, await vapidKeys());
   simulate(b);
@@ -227,12 +243,25 @@ test('N06 essai manuel depuis STUDIO : réponse d’Apple expliquée, clés cont
   let r = (await b.call('POST', '/api/admin/push/test', { endpoint: SECRET_ENDPOINT })).body;
   assert.deepEqual([r.keys.keypair, r.keys.subject, r.this_device, r.devices[0].result, r.devices[0].status], [true, true, 'known', 'ok', 201]);
   assert.match(r.devices[0].explanation, /Accepté/);
+  // 201 d'Apple : accepté, pas reçu. La santé reste « en attente » tant que l'iPhone n'a pas confirmé.
   health = (await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'Notifications iPhone');
-  assert.equal(health.state, 'ok');
+  assert.deepEqual([health.state, /Accepté par le service de notification.*pas encore constatée/.test(health.detail)], ['wait', true], health.detail);
+  const delivered = await openPush(b.net.at(-1).body, keys);
+  assert.deepEqual([delivered.kind, /^[0-9a-f]{32}$/.test(delivered.test)], ['push_test', true], 'identifiant d’essai dans le message chiffré');
+  assert.equal((await b.call('POST', '/api/admin/push/receipt', { test: 'f'.repeat(32) })).body.received, false, 'identifiant inconnu');
+  assert.equal((await b.call('POST', '/api/admin/push/receipt', { test: 'pas-un-identifiant' })).body.error, 'invalid_request');
+  assert.equal((await b.call('POST', '/api/admin/push/receipt', { test: delivered.test })).body.received, true);
+  assert.equal((await b.call('POST', '/api/admin/push/receipt', { test: delivered.test })).body.received, false, 'une seule fois');
+  health = (await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'Notifications iPhone');
+  assert.deepEqual([health.state, /Réception constatée sur iPhone/.test(health.detail)], ['ok', true], health.detail);
+  assert.equal((await b.call('GET', '/api/admin/notifications')).body.channels.push.device_list[0].verification, 'received');
   b.apple = { status: 403, reason: 'BadJwtToken' };
   r = (await b.call('POST', '/api/admin/push/test', { endpoint: SECRET_ENDPOINT })).body;
   assert.deepEqual([r.devices[0].result, r.devices[0].status, r.devices[0].reason], ['permanent', 403, 'BadJwtToken']);
   assert.match(r.devices[0].explanation, /jeton VAPID/);
+  health = (await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'Notifications iPhone');
+  assert.deepEqual([health.state, /Dernier envoi refusé.*BadJwtToken/.test(health.detail)], ['alert', true], 'un refus constaté pendant l’essai est affiché');
+  assert.equal(await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'channel_failure'"), 0, 'essai manuel : aucune alerte en chaîne');
   assert.equal((await b.call('POST', '/api/admin/push/test', { endpoint: `${SECRET_ENDPOINT}-inconnu` })).body.this_device, 'unknown');
   const n = (await b.call('GET', '/api/admin/notifications')).body.channels.push;
   assert.deepEqual([n.devices, n.device_list[0].fp, n.device_list[0].last_error], [1, await fingerprint(SECRET_ENDPOINT), 'apple_403_BadJwtToken']);
@@ -290,7 +319,7 @@ test('N07 clôture des envois échoués : Face ID, historique conservé, e-mails
   assert.equal(b.net.length, 0, 'aucun essai sur une ligne clôturée');
 });
 
-test('N08 migration 0009 sur une base en pleine boucle : rien de perdu, et plus aucune alerte en chaîne après la mise à jour', async () => {
+test('N08 migrations 0009 et 0010 sur une base en pleine boucle : rien de perdu, et plus aucune alerte en chaîne après la mise à jour', async () => {
   const real = await emptyDatabase();
   await migrate(real, ['0001_commerce.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql', '0005_revue_work.sql',
     '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql']);
@@ -303,7 +332,7 @@ test('N08 migration 0009 sur une base en pleine boucle : rien de perdu, et plus 
     real.prepare(`INSERT INTO notifications (kind, ref, level, title, body, at) VALUES ('technical', 'outbox:1', 'critical', 'Notification non distribuée', 'x', ?)`).bind(T0),
   ]);
   const before = JSON.stringify([await real.prepare('SELECT * FROM outbox ORDER BY id').all(), await real.prepare('SELECT endpoint, p256dh, auth, failures FROM push_subscriptions').all()].map((r) => r.results));
-  await migrate(real, ['0009_notifications_fiables.sql']);
+  await migrate(real, ['0009_notifications_fiables.sql', '0010_destinations_reception.sql']);
   const after = JSON.stringify([await real.prepare('SELECT id, channel, dedupe, payload, status, attempts, next_at, at, first_attempt_at, last_attempt_at, uncertain_since, envelope, provider_ref, last_error, route FROM outbox ORDER BY id').all(),
     await real.prepare('SELECT endpoint, p256dh, auth, failures FROM push_subscriptions').all()].map((r) => r.results));
   assert.equal(after, before, 'lignes et colonnes existantes inchangées');
@@ -361,4 +390,162 @@ test('N10 tâche planifiée réelle : panne iPhone avec 40 messages en attente, 
   assert.ok(pushRows >= 40);
   assert.deepEqual([await failureAlerts(b), b.apples(), await b.count("SELECT MAX(attempts) FROM outbox WHERE channel = 'push'")], [1, pushRows, 1]);
   assert.equal(await b.count("SELECT COUNT(*) FROM outbox WHERE channel = 'discord' AND status = 'sent'"), pushRows + 1, 'chaque message et une seule alerte sur Discord');
+});
+
+// ---------- Corrections du contre-audit de Work (28 novembre) : R1 à R5 ----------
+
+test('N11 jeton VAPID identique dans deux isolates workerd sans stockage partagé, en parallèle ; nouveau à l’heure suivante ou si la configuration change', async () => {
+  const { build } = await import('esbuild');
+  const { Miniflare, convertV4MiniflareOptions } = await import('miniflare');
+  const root = new URL('../../', import.meta.url).pathname;
+  const bundle = await build({ bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'], stdin: { resolveDir: root, loader: 'js',
+    contents: `import { vapidAuthorization } from './backend/src/push.mjs';
+      export default { async fetch(request, env) {
+        const { endpoint, now, n } = await request.json();
+        const tokens = await Promise.all(Array.from({ length: n }, () => vapidAuthorization(env, endpoint, now).catch((e) => 'erreur:' + e.message)));
+        return Response.json({ tokens });
+      } };` } });
+  const script = bundle.outputFiles[0].text;
+  const vapid = await vapidKeys();
+  const other = await vapidKeys();
+  const worker = (name, vars) => ({ name, modules: true, script, compatibilityDate: '2026-05-15', bindings: vars });
+  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [worker('a', vapid), worker('b', vapid),
+    worker('c', { ...vapid, VAPID_SUBJECT: 'mailto:sayless@example.invalid' }), worker('d', { ...vapid, VAPID_PRIVATE_KEY: other.VAPID_PRIVATE_KEY })] }));
+  try {
+    const ask = async (name, now, n = 8) => (await (await (await mf.getWorker(name)).fetch('http://local/', { method: 'POST',
+      body: JSON.stringify({ endpoint: SECRET_ENDPOINT, now, n }) })).json()).tokens;
+    const hour = T0 + 3600 * 5;
+    const [a, b] = await Promise.all([ask('a', hour + 10), ask('b', hour + 3590)]);
+    assert.equal(new Set([...a, ...b]).size, 1, 'deux isolates, huit appels simultanés chacun : un seul jeton pendant l’heure');
+    assert.notEqual((await ask('a', hour + 3600, 1))[0], a[0], 'heure suivante : nouveau jeton');
+    assert.notEqual((await ask('c', hour + 10, 1))[0], a[0], 'autre sujet : autre jeton');
+    assert.match((await ask('d', hour + 10, 1))[0], /^erreur:paire de clés VAPID incohérente/, 'clé privée d’une autre paire : aucun jeton émis');
+    const [, jwt] = a[0].match(/^vapid t=([^,]+), k=/);
+    const [header, claims, signature] = jwt.split('.');
+    assert.deepEqual(JSON.parse(Buffer.from(claims, 'base64url')), { aud: 'https://web.push.apple.com', exp: hour + 43200, sub: vapid.VAPID_SUBJECT });
+    const { createPublicKey, verify } = await import('node:crypto');
+    const pub = fromB64url(vapid.VAPID_PUBLIC_KEY);
+    const key = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64url(pub.slice(1, 33)), y: b64url(pub.slice(33)) }, format: 'jwk' });
+    assert.equal(verify('sha256', Buffer.from(`${header}.${claims}`), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature, 'base64url')), true, 'signature vérifiée par OpenSSL');
+  } finally {
+    await mf.dispose();
+  }
+});
+
+test('N12 signature déterministe conforme : vecteurs officiels de la RFC 6979 (P-256, SHA-256) et vérification croisée OpenSSL', async () => {
+  const { signDeterministic } = await import('../../backend/src/es256.mjs');
+  const { createPublicKey, verify } = await import('node:crypto');
+  const d = Buffer.from('C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721', 'hex');
+  const vectors = { sample: ['EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716', 'F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8'],
+    test: ['F1ABB023518351CD71D881567B1EA663ED3EFCF6C5132B354F28D3B0B7D38367', '019F4113742A2B14BD25926B49C649155F267E60D3814B4C0CC84250E46F0083'] };
+  for (const [message, [r, s]] of Object.entries(vectors)) {
+    const sig = Buffer.from(await signDeterministic(d, new TextEncoder().encode(message)));
+    assert.deepEqual([sig.subarray(0, 32).toString('hex').toUpperCase(), sig.subarray(32).toString('hex').toUpperCase()], [r, s], `RFC 6979 A.2.5, « ${message} »`);
+  }
+  for (let i = 0; i < 40; i += 1) {
+    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+    const message = crypto.getRandomValues(new Uint8Array(20 + i));
+    const sig = await signDeterministic(Buffer.from(jwk.d, 'base64url'), message);
+    const pub = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' });
+    assert.equal(verify('sha256', message, { key: pub, dsaEncoding: 'ieee-p1363' }, sig), true);
+    assert.deepEqual(await signDeterministic(Buffer.from(jwk.d, 'base64url'), message), sig, 'même message, même signature');
+  }
+});
+
+test('N13 clôture pendant un envoi : succès tardif noté sans rouvrir ni rétablir le canal ; Worker abandonné jamais relancé ; clôture et journal ensemble', async () => {
+  const b = await signedIn();
+  Object.assign(b.env, await vapidKeys());
+  simulate(b);
+  await addDevice(b);
+  const now = b.clock.now();
+  await b.real.prepare(`INSERT INTO channel_health (channel, state, since, failures, last_error) VALUES ('push', 'failing', ?, 3, 'apple_403_BadJwtToken')`).bind(now - 600).run();
+  await b.real.prepare(`INSERT INTO delivery_health (channel, destination, label, state, since, failures, last_error) VALUES ('push', 'iphone', 'iPhone', 'failing', ?, 3, 'apple_403_BadJwtToken')`).bind(now - 600).run();
+  const insert = (dedupe) => b.real.prepare(`INSERT INTO outbox (channel, dedupe, payload, status, attempts, next_at, at) VALUES ('push', ?, ?, 'pending', 1, 0, ?)`)
+    .bind(dedupe, JSON.stringify({ kind: 'technical', title: 'Ancienne boucle', body: 'Recette' }), now).run();
+  await insert('push:technical:outbox:501');
+  await insert('push:technical:outbox:502');
+  // Envoi 501 : réponse « remis » arrivée après la clôture. Envoi 502 : Worker arrêté en plein envoi.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let inFlight;
+  const started = new Promise((r) => { inFlight = r; });
+  const c = b.context();
+  const job = deliverOutbox(c.ctx, { push: async (message) => { if (message) inFlight(); await gate; return { id: 'remis-tard' }; } }, { ...c.deps });
+  await started;
+  await b.real.prepare(`UPDATE outbox SET status = 'sending', attempts = 2, next_at = ? WHERE dedupe = 'push:technical:outbox:502'`).bind(now + 120).run();
+  const closed = (await b.sensitive('POST', '/api/admin/outbox/close', { scope: 'failed' })).body;
+  assert.deepEqual(closed, { closed: 2, failed: 0, pending: 2, alerts: 0 });
+  release();
+  await job;
+  assert.deepEqual(await b.rows("SELECT dedupe, status, close_reason, last_error, provider_ref FROM outbox WHERE channel = 'push' ORDER BY id"), [
+    { dedupe: 'push:technical:outbox:501', status: 'dead', close_reason: 'cloture_fondateur', last_error: 'remis_apres_cloture', provider_ref: 'remis-tard' },
+    { dedupe: 'push:technical:outbox:502', status: 'dead', close_reason: 'cloture_fondateur', last_error: null, provider_ref: null }]);
+  assert.deepEqual(await b.rows("SELECT state, failures FROM delivery_health WHERE destination = 'iphone'"), [{ state: 'failing', failures: 3 }], 'réponse tardive : santé inchangée');
+  let sends = 0;
+  b.clock.t += 3600;
+  const later = b.context();
+  await deliverOutbox(later.ctx, { push: async () => { sends += 1; } }, later.deps);
+  assert.equal(sends, 0, 'bail expiré d’un Worker abandonné : aucune reprise d’une ligne clôturée');
+  const [entry] = await b.rows("SELECT target, result FROM audit_log WHERE action = 'outbox_closed'");
+  assert.deepEqual(entry, { target: '2 envoi(s)', result: '0 notification(s) résolue(s) ; historique conservé' });
+  assert.equal(b.net.length, 0);
+});
+
+test('N14 « Activer » côté serveur : un abonnement déclaré expiré n’est jamais réactivé ; l’ancien abonnement remplacé est gardé', async () => {
+  const b = await signedIn();
+  Object.assign(b.env, await vapidKeys());
+  simulate(b);
+  const old = await deviceKeys();
+  await b.call('POST', '/api/admin/push/subscribe', { endpoint: SECRET_ENDPOINT, keys: old, key: b.env.VAPID_PUBLIC_KEY, label: 'iPhone' });
+  await b.real.prepare("UPDATE push_subscriptions SET expired_at = ?, last_error = 'apple_410' WHERE endpoint = ?").bind(b.clock.now(), SECRET_ENDPOINT).run();
+  const again = (await b.call('POST', '/api/admin/push/subscribe', { endpoint: SECRET_ENDPOINT, keys: old, key: b.env.VAPID_PUBLIC_KEY, label: 'iPhone' })).body;
+  assert.deepEqual(again, { subscribed: false, reason: 'push_subscription_expired', code: 'apple_410' });
+  assert.deepEqual(await b.rows('SELECT expired_at IS NOT NULL AS expired, last_error FROM push_subscriptions'), [{ expired: 1, last_error: 'apple_410' }]);
+  // Nouvel abonnement de l'appareil, en remplacement d'un autre encore actif : les deux lignes restent.
+  const second = `${SECRET_ENDPOINT}-2`;
+  await b.call('POST', '/api/admin/push/subscribe', { endpoint: second, keys: await deviceKeys(), key: b.env.VAPID_PUBLIC_KEY, label: 'iPhone' });
+  const third = `${SECRET_ENDPOINT}-3`;
+  const replaced = (await b.call('POST', '/api/admin/push/subscribe', { endpoint: third, keys: await deviceKeys(), key: b.env.VAPID_PUBLIC_KEY, label: 'iPhone', replaces: second })).body;
+  assert.equal(replaced.subscribed, true);
+  assert.deepEqual(await b.rows('SELECT endpoint = ? AS third, expired_at IS NULL AS active, last_error FROM push_subscriptions ORDER BY created_at, endpoint', third),
+    [{ third: 0, active: 0, last_error: 'apple_410' }, { third: 0, active: 0, last_error: 'remplace' }, { third: 1, active: 1, last_error: null }]);
+  assert.ok((await b.call('GET', '/api/admin/audit')).body.entries.some((e) => e.action === 'push_subscribe_refused' && e.result === 'apple_410'));
+});
+
+test('N15 Discord par destination : webhook unique partagé = un incident, jamais alerté par lui-même ; deux salons de santé différente ; Santé nomme le salon en panne', async () => {
+  const b = await signedIn();
+  Object.assign(b.env, await vapidKeys(), { DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/partage' });
+  simulate(b);
+  await addDevice(b);
+  b.deps.channels = ['discord', 'push'];
+  b.discord = { status: 404 };
+  const notify = (kind, ref) => b.context().deps.notify({ kind, ref, level: 'info', title: kind, body: 'recette' });
+  const deliver = async (n = 6) => { for (let i = 0; i < n; i += 1) { const c = b.context(); await deliverOutbox(c.ctx, c.deps.senders, c.deps); b.clock.t += 60; } };
+  for (const [kind, ref] of [['order_paid', 'c1'], ['low_stock', 's1'], ['order_paid', 'c2'], ['shop_opened', 'o1']]) await notify(kind, ref);
+  await deliver();
+  const deadDiscord = await b.count("SELECT COUNT(*) FROM outbox WHERE channel = 'discord' AND status = 'dead'");
+  assert.ok(deadDiscord >= 4, `messages Discord refusés : ${deadDiscord}`);
+  assert.deepEqual(await b.rows("SELECT label, state, failures FROM delivery_health WHERE channel = 'discord'"), [{ label: 'webhook unique', state: 'failing', failures: deadDiscord }]);
+  assert.equal(await b.count("SELECT COUNT(*) FROM notifications WHERE kind = 'channel_failure'"), 1, 'trois salons, un seul webhook en panne : une alerte');
+  assert.equal(await b.count("SELECT COUNT(*) FROM outbox WHERE dedupe LIKE 'discord:channel_failure:%'"), 0, 'jamais par le webhook en panne');
+  assert.equal(await b.count("SELECT status FROM outbox WHERE dedupe LIKE 'push:channel_failure:%'"), 'sent', 'alerte partie par l’iPhone');
+  // Salons dédiés : commandes en panne, stock et alertes en marche.
+  Object.assign(b.env, { DISCORD_WEBHOOK_COMMANDES: 'https://discord.com/api/webhooks/2/commandes', DISCORD_WEBHOOK_STOCK: 'https://discord.com/api/webhooks/3/stock',
+    DISCORD_WEBHOOK_ALERTES: 'https://discord.com/api/webhooks/4/alertes' });
+  b.deps.transport = async (url, init) => {
+    b.net.push({ host: new URL(url).host, url, at: b.clock.now(), headers: init.headers, body: init.body });
+    return new Response(null, { status: /commandes|partage/.test(url) ? 404 : url.includes('web.push.apple.com') ? 201 : 204 });
+  };
+  for (let i = 0; i < 3; i += 1) { await notify('order_paid', `cmd-${i}`); await notify('low_stock', `stk-${i}`); await deliver(3); }
+  const alerts = await b.rows("SELECT title FROM notifications WHERE kind = 'channel_failure' ORDER BY id");
+  assert.deepEqual(alerts.map((a) => a.title), ['Notifications Discord (webhook unique) en échec', 'Notifications Discord (salon commandes) en échec']);
+  assert.ok(b.net.some((c) => c.url?.endsWith('/alertes') && JSON.parse(c.body).embeds[0].title === 'Notifications Discord (salon commandes) en échec'), 'alerte par le salon alertes, sain');
+  const states = Object.fromEntries((await b.rows("SELECT label, state FROM delivery_health WHERE channel = 'discord'")).map((r) => [r.label, r.state]));
+  assert.deepEqual(states, { 'webhook unique': 'failing', 'salon commandes': 'failing', 'salon stock': 'ok', 'salon alertes': 'ok' });
+  assert.equal(await b.count("SELECT state FROM channel_health WHERE channel = 'discord'"), 'failing', 'agrégat honnête');
+  const line = (await b.call('GET', '/api/admin/health')).body.checks.find((c) => c.name === 'Notifications Discord');
+  assert.equal(line.state, 'alert');
+  assert.match(line.detail, /salon commandes en échec depuis le .*webhook Discord refusé ou supprimé \(404\)/);
+  assert.ok(!JSON.stringify(line).includes('webhooks/2/commandes'), 'aucune adresse de webhook affichée');
 });

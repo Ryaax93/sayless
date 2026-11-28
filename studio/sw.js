@@ -9,10 +9,17 @@ self.addEventListener('push', (event) => {
   } catch {
     data = {};
   }
-  event.waitUntil(self.registration.showNotification(String(data.title || 'SAYLESS STUDIO').slice(0, 120), {
+  const shown = self.registration.showNotification(String(data.title || 'SAYLESS STUDIO').slice(0, 120), {
     body: String(data.body || '').slice(0, 300), tag: String(data.kind || 'studio'), icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
     data: { url: '/#/notifications' },
-  }));
+  });
+  // Essai depuis STUDIO : la notification est affichée, puis sa réception est confirmée au serveur
+  // (identifiant de l'essai seulement ; sans session STUDIO valide, la confirmation est refusée).
+  const receipt = typeof data.test === 'string' && /^[0-9a-f]{32}$/.test(data.test) && typeof fetch === 'function'
+    ? shown.then(() => fetch('/api/admin/push/receipt', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-Studio-Request': '1' }, body: JSON.stringify({ test: data.test }) })).catch(() => null)
+    : shown;
+  event.waitUntil(receipt);
 });
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

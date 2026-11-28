@@ -68,3 +68,6 @@ __qa*
 
 # Configuration Pages TEST générée localement (nom standard requis par Wrangler Pages).
 /wrangler.json
+
+# Journaux techniques locaux des tests (transport D1), jamais versionnés
+/.journaux-tests/

@@ -8,6 +8,7 @@
 // par heure, clé publique identique à celle de l'abonnement ; réponse 201 si accepté, sinon un code
 // HTTP et une raison (« reason ») gardés pour le diagnostic. Aucune adresse d'abonnement ni clé n'est
 // jamais affichée ou journalisée : seulement le service (apple…), le code et une empreinte courte.
+import { signDeterministic } from './es256.mjs';
 import { all, b64url, batch, fromB64url, sql } from './lib.mjs';
 
 const enc = new TextEncoder();
@@ -39,22 +40,40 @@ async function vapidKey(env) {
     { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
 }
 
-// Jeton VAPID : valable 12 h, réutilisé 6 h (Apple : pas plus d'un renouvellement par heure, jamais
-// plus d'un jour de validité). Un changement de clé ou de sujet donne un nouveau jeton.
+// Jeton VAPID : un seul par heure civile (UTC) et par configuration (service, clé publique, sujet),
+// valable 12 h (Apple : pas plus d'un renouvellement par heure, jamais plus d'un jour de validité).
+// Signature déterministe (es256.mjs) : toutes les instances du Worker, à froid ou en parallèle,
+// produisent exactement le même jeton pendant l'heure, sans stockage ni coordination. Le cache
+// local (promesse partagée) évite seulement de recalculer ; il ne change pas le résultat.
+// Chaque jeton est vérifié avec la clé publique avant usage : une clé privée qui ne correspond pas
+// à la clé publique ne produit jamais de jeton.
+const TOKEN_WINDOW = 3600;
 const TOKEN_LIFETIME = 12 * 3600;
-const TOKEN_REUSE = 6 * 3600;
 const tokens = new Map();
-export async function vapidAuthorization(env, endpoint, now) {
+export function vapidAuthorization(env, endpoint, now) {
   const aud = new URL(endpoint).origin;
-  const cacheKey = `${aud} ${env.VAPID_PUBLIC_KEY} ${env.VAPID_SUBJECT}`;
-  const cached = tokens.get(cacheKey);
-  if (cached && now >= cached.iat && now < cached.iat + TOKEN_REUSE) return cached.value;
+  const iat = Math.floor(now / TOKEN_WINDOW) * TOKEN_WINDOW;
+  const cacheKey = `${iat} ${aud} ${env.VAPID_PUBLIC_KEY} ${env.VAPID_SUBJECT}`;
+  if (!tokens.has(cacheKey)) {
+    for (const key of tokens.keys()) if (!key.startsWith(`${iat} `)) tokens.delete(key);
+    tokens.set(cacheKey, buildToken(env, aud, iat).catch((error) => {
+      tokens.delete(cacheKey);
+      throw error;
+    }));
+  }
+  return tokens.get(cacheKey);
+}
+async function buildToken(env, aud, iat) {
   const header = b64url(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
-  const claims = b64url(enc.encode(JSON.stringify({ aud, exp: now + TOKEN_LIFETIME, sub: env.VAPID_SUBJECT })));
-  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await vapidKey(env), enc.encode(`${header}.${claims}`));
-  const value = `vapid t=${header}.${claims}.${b64url(signature)}, k=${env.VAPID_PUBLIC_KEY}`;
-  tokens.set(cacheKey, { iat: now, value });
-  return value;
+  const claims = b64url(enc.encode(JSON.stringify({ aud, exp: iat + TOKEN_LIFETIME, sub: env.VAPID_SUBJECT })));
+  const input = enc.encode(`${header}.${claims}`);
+  const pub = fromB64url(env.VAPID_PUBLIC_KEY);
+  if (pub.length !== 65 || pub[0] !== 4) throw new Error('VAPID_PUBLIC_KEY invalide');
+  const raw = env.VAPID_PRIVATE_KEY.trim();
+  const signature = await signDeterministic(fromB64url(raw.startsWith('{') ? JSON.parse(raw).d : raw), input);
+  const verifier = await crypto.subtle.importKey('raw', pub, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  if (!(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, verifier, signature, input))) throw new Error('paire de clés VAPID incohérente');
+  return `vapid t=${header}.${claims}.${b64url(signature)}, k=${env.VAPID_PUBLIC_KEY}`;
 }
 
 // Chiffrement « aes128gcm » d'un message pour un abonnement (clé p256dh et secret auth du navigateur).
@@ -178,7 +197,8 @@ async function sendToDevice(env, transport, sub, message, now) {
   }
   let body;
   try {
-    body = await encryptPush(sub, { title: message.title, body: message.body, level: message.level, kind: message.kind });
+    body = await encryptPush(sub, { title: message.title, body: message.body, level: message.level, kind: message.kind,
+      ...(typeof message.test === 'string' ? { test: message.test } : {}) });
   } catch {
     return done('expired', { code: 'abonnement_invalide' });
   }

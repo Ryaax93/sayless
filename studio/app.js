@@ -56,6 +56,7 @@ const MESSAGES = {
   push_denied: 'Notifications refusées dans les réglages de l’iPhone.',
   push_unavailable: 'Installe d’abord STUDIO sur l’écran d’accueil (Partager, puis « Sur l’écran d’accueil »).',
   push_key_mismatch: 'Abonnement créé avec une ancienne clé : touche « Activer » de nouveau.',
+  push_subscription_expired: 'L’iPhone a fourni un abonnement déjà refusé par Apple. Ferme STUDIO, rouvre-le depuis l’icône, puis touche « Activer ».',
 };
 const message = (code) => MESSAGES[code] ?? 'Action impossible pour le moment. Réessaie dans un instant.';
 
@@ -469,15 +470,15 @@ const screens = {
     const ch = d.channels;
     const pushHere = state.pushHere;
     // Abonnement de cet iPhone connu et actif côté serveur, avec la clé actuelle.
-    const pushKnown = Boolean(state.pushFp && (ch.push.device_list ?? []).some((x) => x.active && x.fp === state.pushFp)
-      && (!state.pushKey || state.pushKey === ch.push.public_key));
+    const here = (ch.push.device_list ?? []).find((x) => x.active && x.fp === state.pushFp);
+    const pushKnown = Boolean(state.pushFp && here && (!state.pushKey || state.pushKey === ch.push.public_key));
     return `<header class="top">${nav('today', `${I.back} Aujourd’hui`, { cls: 'back' })}<span class="s">${esc(plural(d.unread, 'nouvelle'))}</span></header>
     <div class="body fade"><h1 class="h1 screen-title" tabindex="-1" data-fk="title">Notifications</h1>${errorBox()}${noticeBox()}
       <div class="sheet">
         <div class="row"><span class="grow"><span class="p strong block">Discord</span><span class="s block">${ch.discord ? 'Salon privé configuré' : 'Webhook d’un salon privé à saisir dans Cloudflare'}</span></span>${pill(ch.discord ? 'Actif' : 'À configurer', ch.discord ? 'on' : 'wait')}</div>
         <div class="row"><span class="grow"><span class="p strong block">Sur cet iPhone</span><span class="s block">${!ch.push.configured ? 'Clés de notification à saisir dans Cloudflare'
     : pushHere && !pushKnown ? 'Abonnement inconnu du serveur, expiré ou créé avec une ancienne clé : touche « Activer »'
-      : pushHere ? (ch.push.failing ? `Activées. ${ch.push.failing}` : 'Activées sur cet appareil') : 'Dès que STUDIO est sur ton écran d’accueil'}</span></span>
+      : pushHere ? (ch.push.failing ? `Activées. ${ch.push.failing}` : `Activées. ${VERIFIED[here?.verification] ?? ''}`.trim()) : 'Dès que STUDIO est sur ton écran d’accueil'}</span></span>
           ${ch.push.configured && (!pushHere || !pushKnown) ? btn('push-enable', 'Activer', { cls: 'pill tall' }) : pill(pushHere ? 'Actif' : 'À configurer', pushHere ? 'on' : 'wait')}</div>
         ${ch.push.configured && pushHere && pushKnown ? `<div class="row top-align"><span class="grow"><span class="p strong block">Essai de notification</span><span class="s block">${state.pushTest
     ? esc(pushTestText(state.pushTest)) : 'Envoie une notification à cet iPhone et affiche la réponse d’Apple.'}</span></span>${btn('push-test', 'Envoyer un essai', { cls: 'pill tall' })}</div>` : ''}
@@ -575,7 +576,7 @@ const screens = {
       export_orders: 'Export des commandes', order_prepared: 'Commande préparée', order_shipped: 'Commande expédiée', order_delivered: 'Commande remise', order_review_resolved: 'Commande vérifiée',
       refund_requested: 'Remboursement demandé', refund_recorded: 'Remboursement enregistré', return_check: 'Retour contrôlé', shop_opened: 'Boutique ouverte', shop_paused: 'Boutique en pause',
       settings_changed: 'Réglages modifiés', backup_downloaded: 'Sauvegarde téléchargée', email_reconciled: 'E-mail rapproché', terms_published: 'CGV publiées', legacy_link_sale: 'Vente lien 1.0', legacy_sync: 'Synchronisation lien 1.0', drop_declared: 'Quantités déclarées',
-      product_drafted: 'Produit en brouillon', product_status: 'Statut de produit', price_changed: 'Prix modifié', finance_settings: 'Déclarations financières', push_subscribed: 'Notifications activées', push_test: 'Essai de notification iPhone', outbox_closed: 'Envois échoués clôturés',
+      product_drafted: 'Produit en brouillon', product_status: 'Statut de produit', price_changed: 'Prix modifié', finance_settings: 'Déclarations financières', push_subscribed: 'Notifications activées', push_test: 'Essai de notification iPhone', outbox_closed: 'Envois échoués clôturés', push_subscribe_refused: 'Abonnement expiré refusé',
       request_received: 'Demande reçue', request_status: 'Demande traitée', notification_resolved: 'Alerte traitée', purge_customer_contacts: 'Coordonnées purgées', import_sale: 'Vente importée' };
     return `${header('Historique', { back: ['health', 'Santé du site'] })}<div class="body fade">${errorBox()}<div class="sheet">
       ${!d ? loadingBox() : d.entries.length ? d.entries.map((e) => `<div class="row"><span class="grow"><span class="p block">${esc(names[e.action] ?? e.action)}</span>
@@ -801,11 +802,18 @@ async function checkPush() {
   }
   if (state.screen === 'notifications' && state.data.notifications) set({}); // état de cet iPhone lu après l'écran
 }
+const VERIFIED = {
+  unverified: 'Jamais vérifiées : touche « Envoyer un essai ».',
+  refused: 'Dernier envoi refusé par le service de notification.',
+  accepted: 'Dernier envoi accepté par Apple ; réception pas encore constatée sur l’iPhone.',
+  received: 'Réception constatée sur cet iPhone.',
+};
 function pushTestText(r) {
   if (!r.keys.keypair) return 'Clés VAPID du serveur incohérentes : Apple refusera chaque envoi. Regénère les clés de test.';
   if (r.this_device === 'unknown') return 'Cet iPhone n’est pas abonné côté serveur : touche « Activer ».';
   if (!r.devices.length) return 'Aucun appareil abonné côté serveur : touche « Activer ».';
-  return r.devices.map((x) => `${x.label} : ${x.explanation}${x.status ? ` (réponse ${x.status}${x.reason ? ` ${x.reason}` : ''})` : ''}`).join(' ');
+  return r.devices.map((x) => `${x.label} : ${x.result === 'ok' ? 'accepté par Apple (201). Quand la notification arrive, cet iPhone le confirme à STUDIO.'
+    : x.explanation}${x.status && x.result !== 'ok' ? ` (réponse ${x.status}${x.reason ? ` ${x.reason}` : ''})` : ''}`).join(' ');
 }
 
 // ---------- actions ----------
@@ -907,20 +915,28 @@ const actions = {
       if ((await permission) !== 'granted') throw new StudioError('push_denied', 0);
       const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
       await navigator.serviceWorker.ready;
-      const key = state.data.notifications.channels.push.public_key;
+      const push = state.data.notifications.channels.push;
+      const key = push.public_key;
       let sub = await reg.pushManager.getSubscription();
-      // Abonnement créé avec une autre clé (installation précédente) : Apple le refuserait. Remplacé.
-      if (sub && subscriptionKey(sub) && subscriptionKey(sub) !== key) {
+      // Abonnement présent mais non confirmé actif par le serveur avec la clé actuelle (inconnu, expiré
+      // chez Apple, créé avec une autre clé) : jamais réutilisé, remplacé par un abonnement neuf.
+      const confirmed = Boolean(sub && state.pushFp && subscriptionKey(sub) === key
+        && (push.device_list ?? []).some((d) => d.active && d.fp === state.pushFp));
+      const replaces = sub && !confirmed ? sub.endpoint : null;
+      if (replaces) {
         await sub.unsubscribe();
         sub = null;
       }
       sub = sub ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64.dec(key) }));
       const json = sub.toJSON();
-      await api('/api/admin/push/subscribe', { endpoint: json.endpoint, keys: json.keys, label: deviceLabel(), ...(subscriptionKey(sub) ? { key: subscriptionKey(sub) } : {}) });
+      const result = await api('/api/admin/push/subscribe', { endpoint: json.endpoint, keys: json.keys, label: deviceLabel(),
+        ...(subscriptionKey(sub) ? { key: subscriptionKey(sub) } : {}), ...(replaces ? { replaces } : {}) });
       await checkPush();
       state.pushTest = null;
       await load('notifications');
-      set({ notice: 'Notifications activées. Touche « Envoyer un essai » pour vérifier.' });
+      // Refus du serveur (abonnement déjà déclaré expiré) : rien n'est annoncé comme activé.
+      if (result?.subscribed !== true) return set({ error: result?.reason ?? 'push_subscription_expired' });
+      return set({ notice: 'Notifications activées. Touche « Envoyer un essai » pour vérifier.' });
     });
   },
   'push-test': () => guarded(async () => {

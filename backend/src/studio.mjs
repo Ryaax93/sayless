@@ -236,30 +236,62 @@ const when = (t) => {
 };
 function failingText(health) {
   if (health?.state !== 'failing') return null;
+  // Discord : chaque destination en panne nommée (salon ou webhook unique), sans adresse.
+  if (health.destinations?.length && health.channel === 'discord') {
+    return health.destinations.map((d) => `${d.label ?? 'webhook'} en échec depuis le ${when(d.since)} (${d.failures} message(s) non remis) : ${explainCode(d.last_error)}`).join(' ; ');
+  }
   return `En échec depuis le ${when(health.since)} (${health.failures} message(s) non remis) : ${explainCode(health.last_error)}`;
 }
 async function channelStates(db) {
   const rows = await all(db, 'SELECT channel, state, since, failures, last_error, alerted_at, last_ok_at FROM channel_health');
-  return Object.fromEntries(rows.map((r) => [r.channel, r]));
+  const failing = await all(db, `SELECT channel, destination, label, since, failures, last_error FROM delivery_health
+    WHERE state = 'failing' ORDER BY since`);
+  return Object.fromEntries(rows.map((r) => [r.channel, { ...r, destinations: failing.filter((d) => d.channel === r.channel) }]));
 }
 // Appareils abonnés, sans adresse ni clé : nom, empreinte, dates, dernier résultat expliqué.
 async function pushDevices(db) {
-  const rows = await all(db, `SELECT endpoint, label, created_at, last_ok_at, last_attempt_at, last_status, last_error, expired_at, failures
-    FROM push_subscriptions ORDER BY created_at DESC LIMIT 10`);
+  const rows = await all(db, `SELECT endpoint, label, created_at, last_ok_at, last_attempt_at, last_status, last_error, expired_at, failures,
+    test_sent_at, received_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 10`);
   return Promise.all(rows.map(async (r) => ({ fp: await fingerprint(r.endpoint), label: r.label ?? 'Appareil', active: r.expired_at === null,
-    created_at: iso(r.created_at), last_ok_at: r.last_ok_at ? iso(r.last_ok_at) : null, last_attempt_at: r.last_attempt_at ? iso(r.last_attempt_at) : null,
-    last_status: r.last_status ?? null, last_error: r.last_error ?? null, explanation: r.last_error ? explainCode(r.last_error) : null,
-    expired_at: r.expired_at ? iso(r.expired_at) : null, failures: r.failures })));
+    verification: deviceVerification(r), created_at: iso(r.created_at), last_ok_at: r.last_ok_at ? iso(r.last_ok_at) : null,
+    last_attempt_at: r.last_attempt_at ? iso(r.last_attempt_at) : null, last_status: r.last_status ?? null, last_error: r.last_error ?? null,
+    explanation: r.last_error ? explainCode(r.last_error) : null, expired_at: r.expired_at ? iso(r.expired_at) : null, failures: r.failures,
+    received_at: r.received_at ? iso(r.received_at) : null })));
 }
-function pushCheck(ctx, { health, active, expired, self }) {
+// État vérifié d'un appareil, du plus faible au plus fort : expiré, jamais essayé, dernier envoi
+// refusé, accepté par le service de notification (201 : ne prouve pas l'affichage), réception
+// constatée par l'iPhone lui-même (essai depuis STUDIO revenu de l'appareil).
+function deviceVerification(r) {
+  if (r.expired_at !== null) return 'expired';
+  if (r.last_attempt_at === null) return 'unverified';
+  if (r.last_error !== null) return 'refused'; // effacé par le prochain envoi accepté : c'est le dernier résultat
+  if (r.received_at !== null && r.received_at >= (r.test_sent_at ?? 0)) return 'received';
+  return 'accepted';
+}
+// Configuré → abonné → essayé → accepté par Apple → reçu sur l'iPhone : le diagnostic dit où en est
+// le canal, d'après les envois automatiques ET le dernier résultat de chaque appareil (un essai
+// manuel refusé apparaît, sans déclencher d'alerte). Seule une réception constatée est « OK ».
+function pushCheck(ctx, { health, devices, self }) {
   const name = 'Notifications iPhone';
   if (!pushReady(ctx)) return { name, state: 'todo', detail: 'Clés VAPID à saisir' };
   if (!self.keypair) return { name, state: 'alert', detail: 'Clé privée et clé publique VAPID incohérentes : Apple refusera chaque envoi (BadJwtToken)' };
   if (!self.subject) return { name, state: 'alert', detail: 'Sujet VAPID invalide : une adresse https: ou mailto: sans espace' };
+  const active = devices.filter((d) => d.verification !== 'expired');
+  const expired = devices.length - active.length;
   const failing = failingText(health);
   if (failing) return { name, state: 'alert', detail: `${failing}. Essai : cloche de l’écran Aujourd’hui, « Envoyer un essai »` };
-  if (!active) return { name, state: 'wait', detail: `Aucun iPhone abonné${expired ? ` (${expired} abonnement(s) expiré(s))` : ''} : ouvre STUDIO depuis l’icône de l’iPhone, cloche, « Activer »` };
-  return { name, state: 'ok', detail: `${active} appareil(s) abonné(s)${health?.last_ok_at ? `, dernier envoi accepté le ${when(health.last_ok_at)}` : ', aucun envoi encore accepté'}` };
+  if (!active.length) return { name, state: 'wait', detail: `Aucun iPhone abonné${expired ? ` (${expired} abonnement(s) expiré(s))` : ''} : ouvre STUDIO depuis l’icône de l’iPhone, cloche, « Activer »` };
+  const refused = active.filter((d) => d.verification === 'refused');
+  if (refused.length === active.length) {
+    return { name, state: 'alert', detail: `Dernier envoi refusé (${refused[0].label}, le ${when(Date.parse(refused[0].last_attempt_at) / 1000)}) : ${refused[0].explanation}` };
+  }
+  const received = active.find((d) => d.verification === 'received');
+  if (received) return { name, state: 'ok', detail: `Réception constatée sur ${received.label} le ${when(Date.parse(received.received_at) / 1000)}` };
+  const accepted = active.find((d) => d.verification === 'accepted');
+  if (accepted) {
+    return { name, state: 'wait', detail: `Accepté par le service de notification le ${when(Date.parse(accepted.last_ok_at) / 1000)}, réception sur l’iPhone pas encore constatée : « Envoyer un essai » depuis l’iPhone` };
+  }
+  return { name, state: 'wait', detail: `${active.length} appareil(s) abonné(s), jamais vérifié(s) : cloche de l’écran Aujourd’hui, « Envoyer un essai »` };
 }
 // Envois échoués non clôturés, groupés par canal et code (aucun contenu, aucune adresse).
 async function outboxFailures(db) {
@@ -447,10 +479,21 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       // envoi (VapidPkHashMismatch). STUDIO le remplace alors par un abonnement à la clé actuelle.
       if (typeof body.key === 'string' && body.key.replace(/=+$/, '') !== String(ctx.VAPID_PUBLIC_KEY).replace(/=+$/, '')) throw fail('push_key_mismatch');
       const labelText = typeof body.label === 'string' ? body.label.slice(0, 40) : 'iPhone';
+      // Un abonnement déjà déclaré expiré (ou à une autre clé) par le service n'est jamais réactivé
+      // tel quel : sa ligne et son état restent dans l'historique, STUDIO doit en créer un nouveau.
+      const known = await one(ctx.db, 'SELECT expired_at, last_error FROM push_subscriptions WHERE endpoint = ?', sub.endpoint);
+      if (known?.expired_at) {
+        await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'push_subscribe_refused', labelText, known.last_error ?? 'expire')]);
+        return json({ subscribed: false, reason: 'push_subscription_expired', code: known.last_error ?? null });
+      }
+      const replaces = typeof body.replaces === 'string' && body.replaces !== sub.endpoint && body.replaces.length <= 1024 ? body.replaces : null;
       await batch(ctx.db, [sql(ctx.db, `INSERT INTO push_subscriptions (endpoint, p256dh, auth, label, created_at) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, failures = 0,
-          expired_at = NULL, last_error = NULL`, sub.endpoint, sub.p256dh, sub.auth, labelText, now),
-      audit(ctx.db, now, 'fondateur', 'push_subscribed', labelText, 'ok')]);
+        ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, failures = 0`,
+      sub.endpoint, sub.p256dh, sub.auth, labelText, now),
+      // Ancien abonnement remplacé sur cet appareil : gardé (historique), plus utilisé.
+      ...(replaces ? [sql(ctx.db, `UPDATE push_subscriptions SET expired_at = COALESCE(expired_at, ?), last_error = COALESCE(last_error, 'remplace')
+        WHERE endpoint = ?`, now, replaces)] : []),
+      audit(ctx.db, now, 'fondateur', 'push_subscribed', labelText, replaces ? 'remplace' : 'ok')]);
       return json({ subscribed: true, fp: await fingerprint(sub.endpoint) });
     }
     case 'POST /api/admin/push/unsubscribe': {
@@ -469,8 +512,17 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       const endpoint = typeof body.endpoint === 'string' && body.endpoint.length <= 1024 ? body.endpoint : null;
       const self = await vapidSelfCheck(ctx);
       const transport = deps.transport ?? fetch;
-      const results = self.keypair ? await sendToDevices(ctx, (...a) => transport(...a), { kind: 'push_test', level: 'info',
-        title: 'Essai SAYLESS STUDIO', body: 'Si tu lis ceci, les notifications de cet iPhone fonctionnent.' }, now, { endpoint }) : [];
+      // Un identifiant par appareil essayé : l'iPhone le renvoie à la réception (« reçu »), ce qui
+      // distingue l'acceptation par Apple de l'arrivée réelle de la notification.
+      const targets = self.keypair ? await all(ctx.db, `SELECT endpoint FROM push_subscriptions WHERE expired_at IS NULL
+        ${endpoint ? 'AND endpoint = ?' : ''} ORDER BY created_at LIMIT 10`, ...(endpoint ? [endpoint] : [])) : [];
+      const results = [];
+      for (const target of targets) {
+        const test = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('');
+        await batch(ctx.db, [sql(ctx.db, 'UPDATE push_subscriptions SET test_id = ?, test_sent_at = ?, received_at = NULL WHERE endpoint = ?', test, now, target.endpoint)]);
+        results.push(...await sendToDevices(ctx, (...a) => transport(...a), { kind: 'push_test', level: 'info', test,
+          title: 'Essai SAYLESS STUDIO', body: 'Si tu lis ceci, les notifications de cet iPhone fonctionnent.' }, now, { endpoint: target.endpoint }));
+      }
       const devices = await Promise.all(results.map(async (r) => ({ label: r.label ?? 'Appareil', fp: await fingerprint(r.endpoint), service: r.service,
         status: r.status || null, reason: r.reason, result: r.result,
         explanation: r.result === 'ok' ? 'Accepté par le service de notification : la notification doit apparaître dans quelques secondes.' : explainCode(r.code) })));
@@ -480,6 +532,15 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       return json({ keys: { subject: self.subject, keypair: self.keypair, key_fp: self.key_fp }, devices,
         this_device: endpoint ? (results.length ? 'known' : 'unknown') : null });
     }
+    // Réception d'un essai, envoyée par le service worker de l'iPhone à l'arrivée de la notification :
+    // seulement l'identifiant de l'essai (aucune donnée), session STUDIO requise.
+    case 'POST /api/admin/push/receipt': {
+      const body = await readJsonBody(request);
+      if (typeof body.test !== 'string' || !/^[0-9a-f]{32}$/.test(body.test)) throw fail('invalid_request');
+      const marked = await batch(ctx.db, [sql(ctx.db, `UPDATE push_subscriptions SET received_at = ? WHERE test_id = ? AND expired_at IS NULL
+        AND received_at IS NULL`, now, body.test)]);
+      return json({ received: marked[0].meta.changes === 1 });
+    }
 
     // ---- santé et historique ----
     case 'GET /api/admin/health': {
@@ -488,8 +549,7 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       const dead = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead' AND closed_at IS NULL`)).n;
       const states = await channelStates(ctx.db);
       const failures = await outboxFailures(ctx.db);
-      const pushRows = await one(ctx.db, `SELECT COALESCE(SUM(CASE WHEN expired_at IS NULL THEN 1 ELSE 0 END), 0) AS active,
-        COALESCE(SUM(CASE WHEN expired_at IS NULL THEN 0 ELSE 1 END), 0) AS expired FROM push_subscriptions`);
+      const devices = await pushDevices(ctx.db);
       const self = await vapidSelfCheck(ctx);
       const queued = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status IN ('pending', 'sending')`)).n;
       // E-mails à rapprocher (V14-R1) : référence de commande ou de demande seulement, aucune adresse.
@@ -509,7 +569,7 @@ export async function handleStudio(request, ctx, { route, url, session, settings
         { name: 'Tâches automatiques', state: cron && now - cron < 300 ? 'ok' : 'alert', detail: cron ? `Dernier passage il y a ${Math.round((now - cron) / 60)} min` : 'Aucun passage enregistré' },
         { name: 'Paiement Stripe', state: stripeReady(ctx) ? 'ok' : 'todo', detail: stripeReady(ctx) ? `Mode ${stripeMode(ctx) === 'live' ? 'réel' : 'test'}${lastEvent ? `, dernier événement ${iso(lastEvent).slice(0, 16).replace('T', ' ')} UTC` : ', aucun événement reçu'}` : 'Clés à saisir' },
         discordCheck(ctx, states.discord),
-        pushCheck(ctx, { health: states.push, active: pushRows.active, expired: pushRows.expired, self }),
+        pushCheck(ctx, { health: states.push, devices, self }),
         { name: 'E-mails clients', state: emailReady(ctx) ? 'ok' : 'todo', detail: emailReady(ctx) ? `Expéditeur ${ctx.EMAIL_FROM}` : 'Resend et domaine vérifié à configurer' },
         { name: 'File d’envoi', state: dead || stuck || uncertain.length ? 'alert' : 'ok', detail: [dead ? `${dead} message(s) non distribué(s)`
           + (failures.groups.length ? ` (${failures.groups.map((g) => `${g.channel} : ${g.code} × ${g.n}`).join(', ')})` : '') : `${queued} message(s) en attente`,
@@ -539,6 +599,7 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       requireStepUp();
       const body = await readJsonBody(request);
       if (body.scope !== 'failed') throw fail('invalid_request');
+      // Clôture et journal dans une seule transaction (lot D1) : l'une ne va jamais sans l'autre.
       const done = await batch(ctx.db, [
         sql(ctx.db, `UPDATE outbox SET closed_at = ?, close_reason = 'cloture_fondateur'
           WHERE status = 'dead' AND closed_at IS NULL AND channel IN ('discord', 'push')`, now),
@@ -547,10 +608,12 @@ export async function handleStudio(request, ctx, { route, url, session, settings
           AND (dedupe LIKE '%:technical:outbox:%' OR dedupe LIKE '%:channel_failure:%')`, now),
         sql(ctx.db, `UPDATE notifications SET resolved_at = COALESCE(resolved_at, ?), read_at = COALESCE(read_at, ?)
           WHERE kind = 'technical' AND ref LIKE 'outbox:%' AND resolved_at IS NULL`, now, now),
+        sql(ctx.db, `INSERT INTO audit_log (at, actor, action, target, result) SELECT ?, 'fondateur', 'outbox_closed',
+          (SELECT COUNT(*) FROM outbox WHERE closed_at = ? AND close_reason = 'cloture_fondateur') || ' envoi(s)',
+          (SELECT COUNT(*) FROM notifications WHERE kind = 'technical' AND ref LIKE 'outbox:%' AND resolved_at = ?) || ' notification(s) résolue(s) ; historique conservé'`,
+        now, now, now),
       ]);
       const [failed, pending, alerts] = done.map((r) => r.meta.changes);
-      await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'outbox_closed', `${failed + pending} envoi(s)`,
-        `${failed} échoué(s), ${pending} alerte(s) en attente, ${alerts} notification(s) résolue(s)`)]);
       return json({ closed: failed + pending, failed, pending, alerts });
     }
     // Copies chiffrées : liste, et téléchargement (copie hors ligne hebdomadaire). Illisibles sans

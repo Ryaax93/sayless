@@ -5,13 +5,14 @@
 import { readFile } from 'node:fs/promises';
 import { createHmac, randomBytes } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { createRequire } from 'node:module';
 import { handleOps, handlePublicApi, createContext } from '../../backend/src/routes.mjs';
 import { StripeError } from '../../backend/src/stripe.mjs';
 import { recordInventory } from '../../backend/src/stock.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
 
 const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql',
-  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql', '0009_notifications_fiables.sql'];
+  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql', '0009_notifications_fiables.sql', '0010_destinations_reception.sql'];
 // Texte de CGV de TEST uniquement (jamais publié) : sert à vérifier la version signée dans le devis.
 export const TEST_TERMS = { version: '2026-11', body: `CGV DE TEST — document fictif utilisé par les essais automatiques. ${'Clause de test. '.repeat(20)}` };
 export const TEST_LINK = { id: 'plink_test', price: 'price_test_lien' };
@@ -33,6 +34,9 @@ globalThis.fetch = (input, init) => {
   return Promise.reject(new TypeError(`réseau externe bloqué pendant les tests : ${url.host}`));
 };
 
+const MINIFLARE_VERSION = (() => {
+  try { return createRequire(import.meta.url)('miniflare/package.json').version; } catch { return 'inconnue'; }
+})();
 let mf;
 let next = 0;
 const SLOTS = 120;
@@ -44,12 +48,34 @@ export async function startDatabases() {
     kvNamespaces: ['BACKUPS'], compatibilityDate: '2026-05-15' }));
 }
 // Échecs de connexion au moteur D1 local (ports épuisés, connexion coupée) : environnement, pas
-// résultat métier. Comptés et signalés en fin de fichier pour ne jamais les confondre avec un défaut.
+// résultat métier. Jamais réessayés ni masqués : l'erreur remonte au code testé, elle est comptée,
+// et chaque occurrence est notée dans un journal technique (fichier de test, opération SQL sans
+// aucune valeur, endroit de l'appel, chaîne complète des causes réseau, versions), pour qu'un
+// avertissement sur un PC puisse être expliqué au lieu d'être supposé.
 const engineFailures = new Map();
-export const engineFailure = (error) => {
-  const text = `${error?.message ?? ''} ${error?.cause?.code ?? ''} ${error?.cause?.message ?? ''}`;
-  const code = /EADDRINUSE|EADDRNOTAVAIL|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed|other side closed|socket/i.exec(text)?.[0];
-  if (code) engineFailures.set(code, (engineFailures.get(code) ?? 0) + 1);
+const engineJournal = [];
+const started = Date.now();
+const causes = (error) => {
+  const chain = [];
+  for (let e = error, depth = 0; e && depth < 5; e = e.cause, depth += 1) {
+    chain.push({ name: e.name ?? null, code: e.code ?? null, errno: e.errno ?? null, syscall: e.syscall ?? null,
+      message: String(e.message ?? '').replace(/https?:\/\/\S+/g, 'adresse').slice(0, 160) });
+  }
+  return chain;
+};
+const callSite = () => (new Error().stack ?? '').split('\n').map((l) => l.trim())
+  .find((l) => /tests[\/\\](backend|review)[\/\\](?!helpers)/.test(l))?.replace(/^at /, '').replace(/^.*[\/\\](tests[\/\\])/, '$1') ?? null;
+export const engineFailure = (error, sqlText = null) => {
+  const chain = causes(error);
+  const pattern = /EADDRINUSE|EADDRNOTAVAIL|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_[A-Z_]+|fetch failed|other side closed|socket/i;
+  // Cause la plus profonde d'abord (ECONNRESET plutôt que « fetch failed ») : c'est elle qui explique.
+  const code = [...chain].reverse().map((c) => (pattern.test(c.code ?? '') ? c.code : pattern.exec(c.message)?.[0])).find(Boolean);
+  if (code) {
+    engineFailures.set(code, (engineFailures.get(code) ?? 0) + 1);
+    if (engineJournal.length < 500) {
+      engineJournal.push({ ms: Date.now() - started, code, operation: sqlText ? String(sqlText).trim().split(/\s+/).slice(0, 3).join(' ') : 'lot', where: callSite(), causes: chain });
+    }
+  }
   return code ?? null;
 };
 export const engineFailureSummary = () => [...engineFailures].map(([code, n]) => `${code} ×${n}`).join(', ');
@@ -57,8 +83,16 @@ export async function stopDatabases() {
   await mf?.dispose();
   if (blockedNetwork.length) console.error(`\n[banc] Appels réseau externes bloqués : ${[...new Set(blockedNetwork)].join(', ')} (×${blockedNetwork.length}).`);
   if (engineFailures.size) {
-    console.error(`\n[banc] Moteur D1 local : échecs de connexion (${engineFailureSummary()}). Cause d’environnement`
-      + ' (ports locaux, charge de la machine), à distinguer d’un défaut métier.');
+    const file = (process.argv.find((a) => /\.test\.mjs$/.test(a)) ?? 'suite').replace(/^.*[\/\\]/, '');
+    const dir = new URL('../../.journaux-tests/', import.meta.url);
+    const target = new URL(`d1-transport-${file.replace(/\.test\.mjs$/, '')}-${process.pid}.jsonl`, dir);
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    mkdirSync(dir, { recursive: true });
+    const head = { fichier: file, node: process.version, plateforme: `${process.platform} ${process.arch}`, miniflare: MINIFLARE_VERSION, summary: engineFailureSummary() };
+    writeFileSync(target, [head, ...engineJournal].map((x) => JSON.stringify(x)).join('\n') + '\n');
+    console.error(`\n[banc] Moteur D1 local : échecs de connexion dans ${file} (${engineFailureSummary()}). Cause d’environnement`
+      + ' (ports locaux, charge de la machine), à distinguer d’un défaut métier, mais validation SOUS RÉSERVE du transport local.'
+      + `\n[banc] Journal technique (sans aucune donnée) : ${decodeURIComponent(target.pathname).replace(/^\/([A-Za-z]:)/, '$1')}`);
   }
 }
 // KV en mémoire pour les sauvegardes : `corrupt` simule une écriture altérée par le stockage.
@@ -99,15 +133,15 @@ export async function emptyDatabase() {
 export function downable(real) {
   const state = { down: false, loseResponseWhen: null, beforeBatch: null, queries: 0 };
   const fail = () => Promise.reject(new Error('D1 indisponible (simulé)'));
-  const watch = (promise) => promise.catch((error) => { engineFailure(error); throw error; });
-  const query = (run) => { state.queries += 1; return state.down ? fail() : watch(run()); };
+  const watch = (promise, sqlText = null) => promise.catch((error) => { engineFailure(error, sqlText); throw error; });
+  const query = (run, sqlText) => { state.queries += 1; return state.down ? fail() : watch(run(), sqlText); };
   const wrap = (stmt, text) => ({
     inner: stmt,
     text,
     bind: (...a) => wrap(stmt.bind(...a), text),
-    first: (...a) => query(() => stmt.first(...a)),
-    all: (...a) => query(() => stmt.all(...a)),
-    run: (...a) => query(() => stmt.run(...a)),
+    first: (...a) => query(() => stmt.first(...a), text),
+    all: (...a) => query(() => stmt.all(...a), text),
+    run: (...a) => query(() => stmt.run(...a), text),
   });
   return {
     state,
@@ -116,7 +150,7 @@ export function downable(real) {
       state.queries += 1;
       if (state.down) throw new Error('D1 indisponible (simulé)');
       if (state.beforeBatch && (await state.beforeBatch(stmts.map((s) => s.text ?? '')))) state.beforeBatch = null;
-      const result = await watch(real.batch(stmts.map((s) => s.inner ?? s)));
+      const result = await watch(real.batch(stmts.map((s) => s.inner ?? s)), stmts.map((s) => s.text ?? '').find(Boolean) ?? 'lot');
       if (state.loseResponseWhen?.(stmts.map((s) => s.text ?? ''))) {
         state.loseResponseWhen = null;
         throw new Error('réponse D1 perdue après validation (simulé)');

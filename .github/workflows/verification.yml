@@ -66,6 +66,12 @@ jobs:
       - name: Risque V14-R1 (e-mail Resend après 24 h), désormais obligatoire
         if: ${{ !cancelled() }}
         run: npm run test:review:risks
+      - name: Contre-audit push de Work (intégrité, mise à jour, six critères R1 à R5)
+        if: ${{ !cancelled() }}
+        run: npm run test:review:push
+      - name: Transport D1 strict (130 réponses de webhook, aucune erreur locale)
+        if: ${{ !cancelled() }}
+        run: npm run test:review:d1
       - name: Face ID avec la vérification SimpleWebAuthn activée
         if: ${{ !cancelled() }}
         run: npm run test:webauthn:bibliotheque
