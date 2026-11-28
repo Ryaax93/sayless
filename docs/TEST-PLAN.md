@@ -1,40 +1,35 @@
-# Vérification et conditions de lancement
+# Recette SAYLESS — API v1.4
 
-## Tests automatisés livrés
+## Résultats locaux du 26 novembre 2026
 
-`npm run test:frontend` : 15 tests Node (contrat stock, fraîcheur, ruptures/réservations, panne réseau, checkout fermé, devis et relais requis, prix navigateur ignorés, redirection autorisée, idempotence de requête, PII hors URL, rendu du stock, démarrage portable et catalogue), plus 13 assertions commerciales.
+| Commande | Résultat |
+| --- | --- |
+| `npm run test:frontend` | 74 tests Node + 13 contrôles commerciaux |
+| `npm run test:inventory` | 16 tests historiques conservés |
+| `npm run test:backend` | 96 tests, dont STUDIO, sécurité, concurrence 200/300 clients et assistant Cloudflare simulé |
+| `npm run test:integration` | 13 scénarios client réel + routeur Claude + D1 locale, Stripe/transporteur simulés |
+| `npm run test:review` | 4/4 |
+| `npm run test:review:v13` | 2/2, anciennes anomalies corrigées |
+| `npm run test:review:v14` | 6/6, intégrité transactionnelle et restauration |
+| `npm run test:review:risks` | **1 échec connu V14-R1** : reprise Resend après 24 h |
+| `npm audit`, `npm audit --omit=dev` | Zéro vulnérabilité chacun |
+| Builds boutique, boutique TEST, STUDIO, Worker dry-run et Pages Functions | Réussis, sans déploiement |
 
-`npm run test:inventory` : 16 tests historiques sur Miniflare/D1 locale éphémère : 20 acheteurs pour 3 pièces, atomicité, déduplication, HMAC, montants/devises, ordre des notifications, expirations, échecs réseau, annulation concurrente, remboursement distinct du retour, ajustement concurrent, autorisation/CSRF et refus des paiements réels.
+Total positif : **211 tests Node + 13 contrôles commerciaux**. Ne pas omettre le test rouge séparé dans un bilan. Preuves : [qa/v14](qa/v14/README.md). Node 24.22.3/npm 11.19.1 sur Linux ici ; Windows fondateur constitue une recette antérieure distincte.
 
-Ces tests utilisent exclusivement des fixtures explicitement de test. Ils ne prouvent pas une connexion Stripe, Boxtal, D1 distant, Discord ou Resend opérationnelle.
+Les scénarios frontend couvrent stock inconnu, pause, réservé, épuisé, destination, code postal, devis expiré, consentement, double clic, réseau interrompu, reprise d'ancienne tentative, retour Stripe et confirmation en attente. Les 17 nouveaux tests CGV couvrent corps exact, hash, route sûre, document invalide, Web Crypto indisponible, changement avant paiement et rendu sans injection.
 
-## Reproductibilité
+## Avant de déclarer la recette hébergée réussie
 
-- Copie de travail indépendante de l’atelier, sans node_modules ou état D1 préexistant.
-- Processus du serveur statique lancé avec seulement PATH et PORT ; les fichiers publics répondent, les API refusent, les fichiers internes ne sont pas accessibles.
-- `npm ci` depuis le lock puis suites de tests ; `npm run build:storefront` ne publie rien.
-- Contrôle des références de ressources et des licences, liste exhaustive et empreintes source.
-- Relecture de la branche GitHub et comparaison de tous les blobs avec la copie locale après dépôt.
-- SHA de main et version de l’aperçu vérifiés avant/après ; aucun workflow de publication ajouté.
+1. Exécuter la procédure PowerShell sur le SHA livré ; conserver les codes de sortie, pas seulement les dernières lignes.
+2. Autorisation du fondateur, puis environnement Cloudflare TEST séparé avec ventes fermées. Confirmer migrations, santé, cron, CGV TEST archivées et métriques CPU/D1/KV sur 24 h.
+3. Recette iPhone/Safari : inscription réelle, UP/UV, Face ID, PWA, navigation clavier externe/VoiceOver, codes de secours, anciennes sessions/passkeys invalidées, réauthentification sensible et push.
+4. Restauration sur base de test distincte, bonne et mauvaise clé, intégrité CGV, intentions et commandes, reprise sans réexpédition aveugle d'e-mails anciens.
+5. Après correction R1 et accord : Resend réellement reçu, destinataire TEST, réponse perdue, reprise bornée, doublons et état incertain. Discord TEST sans PII ni tokens, budget partagé.
+6. Stripe TEST : aucune clé réelle, falsification prix/stock/refus serveur, dernière pièce concurrente, webhooks signés, dupliqués et désordonnés, changement de CGV, devis expiré, création de session incertaine, abandon et reprise. Aucun double débit ou décompte. Ne pas confondre statut local et paiement confirmé côté serveur.
+7. Transporteur confirmé : relais réel fermé/invalide, adresse exacte dans devis/commande/étiquette, frais et poids final. Aucun achat réel d'étiquette sans autorisation.
+8. Annulations/remboursements : pas de restock avant retour physique validé ; écritures idempotentes et journalisées.
+9. Liens de suivi, anti-énumération, expiration, requêtes et accusés durables, pas de PII dans URL/logs/Discord.
+10. Vérification des renseignements administratifs réels, mesures produit, délais, SEO, performances et contenu avant ouverture commerciale. Inventaire actif confirmé dans STUDIO après contrôle des ventes V1.
 
-## Recette navigateur
-
-Vues 320/390/1440 px : absence de débordement, logo et images chargés, navigation/clavier, modal panier/guide, toutes les pages légales, compteur sans détail par taille, animation continue et pause/reprise. Sur un chargement neuf, l’animation démarre ; ne pas livrer un onglet laissé en pause. Tester aussi réduction des animations et lecteurs d’écran sur les appareils cibles.
-
-## À réaliser avec Claude, avant toute vente
-
-- Inventaire physique S/M/L confirmé ; pas de quantité fabriquée pour faire passer un test.
-- 200 tentatives simultanées sur la dernière pièce sur D1 de test ; une seule réservation ; tests multi-lignes et multi-variantes.
-- Prix, quantité, frais de port et relais falsifiés dans le navigateur : refus/recalcul serveur ; devis expiré et choix modifié.
-- Paiement Stripe test, webhook signé exact/corps modifié, signature expirée, notifications dupliquées/désordonnées, double clic et redirection avant webhook.
-- Échec réseau après réservation et après création de session ; reprise idempotente ; état inconnu sans double réservation ni libération prématurée.
-- Abandon, paiement différé, expiration, annulation et réconciliation de secours.
-- Remboursement sans restock automatique ; retour physique validé une fois ; motif journalisé.
-- Relais réel fermé ou non admissible, changement de mode, absence de fournisseur ; adresse et identifiant sur commande/étiquette.
-- Suivi non énumérable, jeton expiré, contrôle d’accès ; aucune PII dans URLs/logs/Discord.
-- Accusé de réception durable des demandes et rétractations, zéro faux succès en cas de panne.
-- Chaque alerte Discord une fois ; e-mails Resend, étiquette/suivi Boxtal en test ; quotas et retries bornés.
-- Authentification Studio sur iPhone et ordinateur, accès interdit sans droits, journal des actions et procédure de restauration.
-- Audit juridique des renseignements réels et des textes avant vente ; vérification des zones et délais.
-- SEO réel, URLs, sitemap, OG, données structurées fiables, budget performance, accessibilité et compatibilité Safari iPhone.
-- Commande réelle de bout en bout uniquement après autorisation explicite du fondateur ; plan de retour vers la 1.0 en vitrine sans vente à valider, avec contrôle de l’ancien lien Stripe.
+Aucun essai externe n'est autorisé par ce document seul. Le workflow CI de Claude doit encore inclure la nouvelle suite v1.4 et rendre les audits bloquants ; proposition dans la passation, sans changement unilatéral.

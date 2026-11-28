@@ -1,0 +1,50 @@
+✖ P3-R1a : ancien échec automatique après un essai reçu, aucune fausse panne du canal (2334.543371ms)
+ℹ Ancien 403 après nouvel essai reçu : appareil=201, canal=failing, Santé=alert, incidents ouverts=1.
+✖ P3-R1b : nouvel échec entre résultat appareil et rétablissement du canal, aucune résolution périmée (979.521079ms)
+ℹ Ancien succès appliqué, puis nouveau 403, puis résolution tardive : appareil=403, canal=ok, incidents ouverts=0.
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3944.911091
+
+✖ failing tests:
+
+test at tests/review/push-third-open-issues.test.mjs:24:1
+✖ P3-R1a : ancien échec automatique après un essai reçu, aucune fausse panne du canal (2334.543371ms)
+  AssertionError [ERR_ASSERTION]: Une erreur dépassée doit être conservée pour son message sans déclarer le canal actuellement en panne.
+
+  'failing' !== 'ok'
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-third-open-issues.test.mjs:51:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'failing',
+    expected: 'ok',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-third-open-issues.test.mjs:56:1
+✖ P3-R1b : nouvel échec entre résultat appareil et rétablissement du canal, aucune résolution périmée (979.521079ms)
+  AssertionError [ERR_ASSERTION]: Le booléen applied lu avant la transaction ne suffit pas : garder la condition de tentative dans le lot de rétablissement.
+
+  'ok' !== 'failing'
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-third-open-issues.test.mjs:77:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'ok',
+    expected: 'failing',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

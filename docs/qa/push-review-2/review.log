@@ -1,0 +1,17 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review
+> node --test tests/review/business-invariants.test.mjs tests/review/recovery-safety.test.mjs
+
+✔ Vente 1.0 réglée après comptage : sa pièce est retirée de la disponibilité (4093.084864ms)
+✔ Une tentative déjà réservée retrouve sa session ouverte après l’expiration du devis (475.763511ms)
+✔ La restauration après une vente concomitante conserve les invariants de stock (497.470602ms)
+✔ contre-revue Work : récupération ferme toute ancienne session et annule ses défis avant réinscription (4269.960561ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5600.560629

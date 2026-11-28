@@ -1,0 +1,15 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review:d1
+> node --test tests/review/d1-delivery-observability.test.mjs
+
+✔ D1-W1 300 clients / 26 pièces / 130 webhooks : contrôler toutes les réponses, pas seulement le stock final (55132.383728ms)
+ℹ Checkout {"200:ok":26,"409:held":274} ; webhook {"200":130} ; transport D1 : 0 erreur.
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 55721.183185

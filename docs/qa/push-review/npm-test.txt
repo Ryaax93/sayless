@@ -1,0 +1,326 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test
+> npm run test:frontend && npm run test:inventory && npm run test:backend && npm run test:integration
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:frontend
+> node --test tests/api-client.test.mjs tests/stock-display.test.mjs tests/portable.test.mjs tests/checkout-flow.test.mjs tests/checkout-return.test.mjs tests/customer-service.test.mjs tests/test-config.test.mjs tests/terms.test.mjs tests/pages-config.test.mjs && node tests/commerce.test.cjs
+
+✔ only verified complete fresh inventory supplies a quantity (2.600881ms)
+✔ holds, a true sold out, missing stock and partial outages stay distinct (0.526624ms)
+✔ duplicate and inconsistent variants are rejected (0.354057ms)
+✔ network failure becomes an unavailable error without a fallback quantity (1.517198ms)
+✔ checkout cannot run by default and never calls the network (0.625961ms)
+✔ checkout blocks unverified stock, missing relay and stale quotes (0.98107ms)
+✔ checkout sends identifiers and quantities, not browser prices; duplicate retries reuse the caller key (1.358031ms)
+✔ unexpected checkout redirect destinations are refused (0.695525ms)
+✔ order lookup keeps email out of URLs (0.751778ms)
+✔ v1.2 total_available est le total, orderable n’est jamais additionné comme inventaire (0.512753ms)
+✔ v1.2 alias available ignoré, mode pause distinct et plafond de commande respecté (0.392174ms)
+✔ Retry-After et détails serveur préservés ; statut demandé par POST sans données personnelles dans l’URL (1.717106ms)
+✔ une reprise avec clé existante n’exige ni nouveau jeton ni stock libre, le serveur vérifie la tentative (0.708535ms)
+✔ devis serveur intégral, aucune coordonnée personnelle, acceptation explicite avant paiement (3.844932ms)
+✔ double clic : une seule mutation et une clé unique (6.670528ms)
+✔ réponse perdue : reprise explicite, même clé, même devis et aucun nouveau Turnstile (1.024955ms)
+✔ rechargement après coupure : tentative retrouvée sans jeton anti-abus ni coordonnées stockées (0.887832ms)
+✔ devis expiré avant toute tentative : aucun checkout, nouveau devis et CGV requis (0.439014ms)
+✔ reprise expirée côté backend : conserve la tentative incertaine, ne crée pas une deuxième réservation (0.640073ms)
+✔ devis modifié ou montant incohérent refusé avant affichage comme payable (0.427316ms)
+✔ pause, rupture et réservation empêchent un nouveau checkout (1.200146ms)
+✔ Retry-After respecté ; une tentative en cours conserve sa clé (0.686161ms)
+✔ CGV obsolètes : nouvelle acceptation et nouveau devis obligatoires (0.596959ms)
+✔ France métropolitaine : Corse, outre-mer et Monaco refusés ; CP obligatoire (0.292295ms)
+✔ une pièce maximum même si un ancien panier contient plusieurs tailles (0.278565ms)
+✔ arrêt lecture stock : écran caché, hors achat, 10 minutes inactif et Retry-After (0.182081ms)
+✔ retour Stripe : seule une réponse serveur explicite paid confirme la commande (0.20136ms)
+✔ une reprise qui réclame une nouvelle vérification conserve sa clé et utilise un jeton neuf (0.474115ms)
+✔ v1.3 : tentative payée, à vérifier ou en traitement conservée ; jamais transformée en nouvel achat (1.863543ms)
+✔ v1.3 : seules une expiration ou un échec explicites autorisent un nouveau devis (0.76601ms)
+✔ v1.3 : réponse de clôture incomplète conserve la tentative par prudence (2.386461ms)
+✔ v1.3 : reprise après onze minutes avec la même clé et les CGV initiales, même si les CGV changent (0.301699ms)
+✔ v1.3 : les anciennes tentatives v1.2 restent récupérables sans devenir de nouveaux devis (0.507906ms)
+✔ v1.3 : devis sans version des CGV ou relais incomplet refusé (0.404271ms)
+✔ le retour annulé nettoie l’adresse et ne déclenche ni vérification payante ni libération (14.132283ms)
+✔ la page de retour exige les deux identifiants et présente une confirmation en attente (5.742236ms)
+✔ une confirmation payée vide uniquement le panier de la tentative correspondante (5.7855ms)
+✔ le polling de retour reste borné et ne lit pas le statut quand la page est masquée (5.627365ms)
+✔ suivi : jeton unique dans le fragment, jamais dans les paramètres de requête (2.030702ms)
+✔ suivi : jeton transmis uniquement dans Authorization, réponse sans données personnelles validée (2.682803ms)
+✔ demandes : double clic partagé et aucune reprise aveugle après résultat réseau incertain (0.765709ms)
+✔ demandes : Retry-After bloque les renvois et refus de configuration sans faux succès (0.559363ms)
+✔ demandes : référence et date exigées ; un booléen accepted ne prouve pas l’enregistrement (1.237271ms)
+✔ relais : adresse complète, cohérence du code postal et zone vérifiées (0.530139ms)
+✔ demandes : une autre demande ne reçoit pas l’accusé d’un formulaire déjà en cours (0.449078ms)
+✔ suivi : champs hérités inconnus explicitement null, sans taille ni livraison inventée (0.286987ms)
+✔ Pages TEST : configuration limitée à la base de test, sans recopier de secret ni de réglage libre (310.768244ms)
+✔ Pages TEST : état incomplet ou origine de production refusé (0.763716ms)
+✔ a standalone Node process serves the storefront and refuses every API without external services (230.048282ms)
+✔ the catalogue contains approved product facts and no invented stock or measurements (3.503013ms)
+✔ le code servi sépare STUDIO et ne propose qu’une sortie vers le paiement après le devis (4.627707ms)
+✔ a theoretical declaration is never presented as live available inventory (6.86038ms)
+✔ the ticker and product show one total, while a depleted size is blocked (3.441952ms)
+✔ network failure and stale inventory remove the quantity and block the purchase path (3.597915ms)
+✔ the sold-out presentation requires an explicit confirmed drop state (2.577365ms)
+✔ v1.4 : document exact, SHA-256 Web Crypto et requête sans cache sur la version du devis (21.110738ms)
+✔ v1.4 : refus du document invalide — texte (2.497918ms)
+✔ v1.4 : refus du document invalide — empreinte (1.434925ms)
+✔ v1.4 : refus du document invalide — version (0.862374ms)
+✔ v1.4 : refus du document invalide — format (0.654664ms)
+✔ v1.4 : refus du document invalide — vide (0.59809ms)
+✔ v1.4 : refus du document invalide — trop_long (2.282537ms)
+✔ v1.4 : refus du document invalide — date (0.747282ms)
+✔ v1.4 : refus du document invalide — etat (0.842474ms)
+✔ v1.4 : empreinte cohérente avec le document mais différente du devis refusée (5.702116ms)
+✔ v1.4 : aucune URL externe, relative détournée ou autre version n’est téléchargée (0.654684ms)
+✔ v1.4 : Web Crypto absent bloque proprement le consentement (0.577539ms)
+✔ v1.4 : CGV indisponibles, changées ou consentement retiré avant réservation bloquent le paiement (6.605791ms)
+✔ v1.4 : version et empreinte transmises, double clic partagé et reprise sans relire les nouvelles CGV (4.133512ms)
+✔ v1.4 : résultat CGV tardif après changement de livraison ignoré (1.119617ms)
+✔ v1.4 : un nouveau devis sans empreinte est refusé ; une tentative ancienne conserve sa forme originale (2.309778ms)
+✔ v1.4 : page CGV rend le texte brut sans injection, même pour une archive ancienne (4.068244ms)
+✔ configuration de recette : origine séparée obligatoire et paiements fermés par défaut (2.304329ms)
+✔ configuration de recette : aucun secret recopié et activation impossible sur une autre origine (1.481835ms)
+ℹ tests 74
+ℹ suites 0
+ℹ pass 74
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 523.883646
+13 vérifications commerciales réussies (estimations non payables).
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:inventory
+> node --test tests/inventory.test.mjs
+
+✔ inventory remains unallocated until an exact 26-piece breakdown is confirmed (3802.811249ms)
+✔ 20 concurrent buyers cannot reserve more than three units (803.617412ms)
+✔ a multi-variant reservation rolls back entirely if one line is unavailable (101.955063ms)
+✔ concurrent duplicate checkout requests reserve once and reject changed payloads (303.500819ms)
+✔ signed notifications are verified using the raw body, tolerance and v1 signatures (29.160571ms)
+✔ duplicate and reordered payment notifications never double-count stock (449.740649ms)
+✔ wrong amount, currency or line items cannot confirm an order (147.138265ms)
+✔ abandoned and failed sessions release once; delayed payments remain reserved (332.519291ms)
+✔ an uncertain Stripe response holds stock; retry uses the same order and provider key (149.611586ms)
+✔ a database response lost after commit does not reserve a second time (115.570897ms)
+✔ a network-failed webhook remains retryable and only records the verified provider result (168.32661ms)
+✔ cancelling checks provider state again to handle a concurrent payment (177.951938ms)
+✔ refunds do not restock; a checked return is explicit, bounded and idempotent (300.011388ms)
+✔ admin adjustments preserve holds and use compare-and-swap against concurrent edits (165.566187ms)
+✔ admin access is server-authorized, claim is owner-only, and cross-site writes are rejected (95.684138ms)
+✔ live payments and unverified quantities fail closed (26.457384ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7617.534627
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:backend
+> node --test tests/backend/scenarios.test.mjs tests/backend/parity.test.mjs tests/backend/decisions.test.mjs tests/backend/studio.test.mjs tests/backend/corrections.test.mjs tests/backend/studio-screens.test.mjs tests/backend/webauthn.test.mjs tests/backend/webauthn-bibliotheque.test.mjs tests/backend/automations.test.mjs tests/backend/notifications-push.test.mjs
+
+✔ T01 rapport quotidien : 10 h à Paris en hiver (9 h UTC) et en été (8 h UTC), une seule fois par jour, sans donnée personnelle (5565.15411ms)
+✔ T02 tâche de chaque minute : minute 5 = sauvegarde seule (limites de l’offre gratuite) ; sinon balayage, envois et battement (1031.534187ms)
+✔ T03 /health pour une surveillance externe : tâche planifiée jamais lancée, à jour, puis en retard ; aucune donnée sensible (834.39416ms)
+✔ T04 assistant de l’environnement de test : étapes vérifiées, reprise après l’adresse workers.dev, secrets envoyés une fois et jamais affichés (6175.098627ms)
+✔ T05 assistant de TEST : jamais de succès annoncé si le contrôle final échoue ; accord explicite ; reprise après coupure ; Worker non isolé refusé (4873.798558ms)
+✔ T06 Discord par salon : routage côté serveur, webhook unique en secours, Retry-After respecté, salon en panne isolé, aucune donnée client (5128.737198ms)
+✔ R01 lien 1.0 : lien et prix reconnus, instant réel du règlement, deux côtés de l’inventaire, cas ambigus soumis au fondateur (7929.215547ms)
+✔ R02 lien 1.0 : inventaire non confirmé = historique sans effet ; lien non enregistré dans STUDIO = tout à vérifier (845.178281ms)
+✔ R03 reprise : tentative retrouvée par sa clé après l’expiration du devis ; même session et même réservation ; nouvel achat = devis valide (1276.242027ms)
+✔ R04 reprise d’une tentative jamais reçue par Stripe, plus de 30 s après : tentative close sans fausse alerte, pièce rendue (773.176368ms)
+✔ R05 sauvegardes pendant des ventes simultanées : chaque image est cohérente et restaurable ; une lecture table par table serait détectée (18041.265092ms)
+✔ R06 copie défectueuse ou image incohérente : jamais comptée, aucune rotation, copies précédentes intactes (1628.92543ms)
+✔ R07 ouverture : inventaire de TOUT le produit, CGV publiées et versionnées, chiffrement des coordonnées obligatoire (1050.188136ms)
+✔ R08 coordonnées : liées à leur commande ; clé retirée après le paiement = commande à vérifier, aucune étiquette (1383.11027ms)
+✔ R09 destination : recherche de relais et devis appliquent les mêmes refus ; relais choisi figé dans la commande (592.242042ms)
+✔ R10 balayage : session incertaine retrouvée pendant la réservation et gardée ; refus explicite de Stripe = pièce rendue (627.1347ms)
+✔ R11 V13-B1 confirmation : intention écrite avec la vente ; panne de file réparée par la tâche planifiée, jamais perdue ni doublée (1034.78651ms)
+✔ R12 V13-B1 webhooks simultanés et adresses : une confirmation, aucune adresse en clair ; sans envoi configuré au paiement, aucune confirmation tardive (2964.793944ms)
+✔ R13 V13-B1 accusé des demandes : demande et intention dans la même transaction ; panne de file réparée, référence renvoyée (403.558501ms)
+✔ R14 V13-B1 intention bloquée : alerte critique au 5e essai, essais espacés ; commande remboursée entre-temps = rien envoyé (958.92972ms)
+✔ R15 V13-B2 CGV : devis et réservation exigent le document archivé ; publication concurrente refusée par la base ; reprise préservée (1095.447031ms)
+✔ R16 V13-C1 texte des CGV : route publique en lecture seule, document exact et empreinte ; empreinte vérifiée au paiement ; texte altéré jamais servi (613.327673ms)
+[R17] arriéré traité en 9 minutes
+✔ R17 offre gratuite : tâche planifiée sous 50 requêtes D1 et 50 appels externes par minute, même après l’ouverture d’un drop ; rien perdu ni doublé (9274.182688ms)
+✔ R18 offre gratuite : webhook de la dernière pièce (fin du drop) sous 50 requêtes ; pire coût par unité dans les marges du budget (4160.219383ms)
+✔ R19 V14-R1 : réponse perdue, reprise dans les 23 h sans doublon ; au-delà, « à vérifier » et alerte, jamais de second envoi automatique (3884.832692ms)
+✔ R20 V14-R1 : refus net de Resend = échec ordinaire ; panne de Resend = essais poursuivis dans la fenêtre ; essais bornés (2000.184213ms)
+✔ R21 V14-R1 : sauvegarde restaurée et lignes d’avant la migration datées prudemment (1839.078364ms)
+✔ R22 API v1.5 : sans empreinte ou avec une fausse, aucune réservation ; tentative v1.4 sans empreinte toujours reprise ; même clé, autre contenu refusé (632.940133ms)
+✔ D01 zones : métropole acceptée ; Corse, outre-mer, Monaco et relais corse refusés avant paiement (5545.099525ms)
+✔ D02 livraison et point relais choisis sur SAYLESS ; Stripe n’affiche qu’une option, au montant exact du récapitulatif (1395.009404ms)
+✔ D03 adresse saisie sur Stripe hors zone : commande « à vérifier », alerte, pas d’étiquette ni de remboursement automatique (1078.283091ms)
+✔ D04 stock public minimisé : états et quantité commandable seulement, total du drop exact, sécurité inchangée (956.207256ms)
+✔ D05 conservation : archivage à 90 jours, suppression à 913 jours, noms gardés pour la comptabilité, coupée par défaut (2280.657289ms)
+✔ D06 sauvegarde chiffrée : illisible sans la clé privée, inaltérable, rotation, restauration complète (10633.185915ms)
+✔ N01 iPhone refusé par Apple, Discord en marche : une seule alerte, aucune boucle, au plus un rappel par jour (19918.606568ms)
+✔ N02 Discord ET iPhone en panne en même temps : une alerte par canal, aucune alerte sur une alerte, nombre d’essais borné (9056.819964ms)
+✔ N03 aucun appareil abonné : rien en file pour l’iPhone, aucune alerte ; abonnement expiré = ligne close et une seule notice (1344.755321ms)
+✔ N04 diagnostic Apple : refus, attente, panne passagère, autre clé ; codes sans adresse, clé ni donnée personnelle (709.51468ms)
+✔ N05 jeton VAPID conforme à Apple : réutilisé au moins une heure, valable moins d’un jour, en-têtes valides (504.194787ms)
+✔ N06 essai manuel depuis STUDIO : réponse d’Apple expliquée, clés contrôlées, aucun secret renvoyé, fréquence limitée (1654.106525ms)
+✔ N07 clôture des envois échoués : Face ID, historique conservé, e-mails clients jamais touchés, plus aucun essai (1180.719857ms)
+✔ N08 migration 0009 sur une base en pleine boucle : rien de perdu, et plus aucune alerte en chaîne après la mise à jour (790.137815ms)
+✔ N09 canal rétabli : alerte résolue au premier envoi accepté ; nouvelle panne plus tard = nouvelle alerte (680.204516ms)
+✔ N10 tâche planifiée réelle : panne iPhone avec 40 messages en attente, budget de l’offre gratuite tenu, file vidée, une alerte (3697.435124ms)
+✔ W01 stock invendable tant que l’inventaire physique n’est pas confirmé ; aucun total imposé (26 reste théorique) (4551.413344ms)
+✔ W02 20 acheteurs simultanés ne réservent jamais plus de 3 pièces (5906.730023ms)
+✔ W03 panier de plusieurs tailles : tout est annulé si une ligne n’est plus disponible (1234.582696ms)
+✔ W04 doublons simultanés : une seule réservation ; contenu modifié avec la même clé refusé (1468.008073ms)
+✔ W05 signature : corps brut, tolérance, plusieurs signatures v1 (une seule valide suffit) (828.639282ms)
+✔ W07 montant, devise ou lignes inattendus : la commande passe « à vérifier », aucune pièce attribuée (907.812027ms)
+✔ W09 réponse Stripe incertaine : la reprise avec la même clé retrouve la même session (724.202182ms)
+✔ W10 réponse de la base perdue après validation : la reprise ne réserve pas une seconde fois (671.615705ms)
+✔ W11 webhook avec Stripe injoignable : 500, rien d’enregistré, puis traité au renvoi (1141.783833ms)
+✔ W13 retour borné : impossible de remettre en stock plus que la quantité vendue (958.221394ms)
+✔ W14 ajustements : jamais sous les réservations ; deux écrans simultanés = un seul gagne (695.776485ms)
+✔ W15 écritures publiques : autre origine, sans origine, mauvais type ou corps trop gros refusés (350.524522ms)
+✔ W16 paiements réels et quantités non vérifiées : tout reste fermé par défaut (1239.569794ms)
+✔ C01 le lecteur de stock de la boutique accepte la réponse du serveur (disponible, réservé, SOLD OUT, inconnu) (1352.934344ms)
+✔ C02 parcours complet avec le vrai client : devis serveur, checkout idempotent, redirection Stripe (601.081582ms)
+✔ C03 catalogue : la base (prix, tailles, livraison) correspond à data/products.json (704.226147ms)
+✔ C04 suivi, recherche de commande et demandes : refus explicite tant que non raccordés (jamais de faux succès) (467.818422ms)
+✔ t01 dernière pièce : 200 clients simultanés, une seule réservation (41267.558721ms)
+✔ t02 volume et doublons : 300 clients pour 26 pièces, chaque webhook reçu 5 fois (54287.132938ms)
+✔ t03 abandon : session fermée chez Stripe avant libération, pièce rendue une fois puis revendue (776.42151ms)
+✔ t04 Stripe injoignable au balayage : pièce gardée, puis rendue au retour de Stripe (335.670417ms)
+✔ t05 payé pendant le balayage : le balayage vend au lieu de libérer, une seule commande (586.516296ms)
+✔ t06 paiement différé : gardé en attente, accepté = vendu, refusé = rendu une fois (868.275777ms)
+✔ t07 événements dans le désordre : une vente, une pièce rendue, rien en double (1196.953728ms)
+✔ t08 paiement tardif sans stock : commande à traiter + alerte, jamais décomptée au renvoi (849.860661ms)
+✔ t09 signatures : modifiée, trop ancienne, mauvais secret refusées sans rien écrire (448.638626ms)
+✔ t10 base indisponible ou boutique en pause : vente refusée, aucune session de paiement (350.370142ms)
+✔ t11 Stripe indisponible à la création : pièce gardée, session retrouvée pour la reprise, revendue à l’expiration (524.111469ms)
+✔ t12 base en panne pendant le webhook : 500, puis traité une seule fois (431.033652ms)
+✔ t13 étiquettes : 30 clics = 1 achat ; réponse perdue = récupérée ; commande remboursée = refus (1443.298118ms)
+✔ t14 remboursement et retour : stock inchangé ; contrôle OK ×10 = +1 une fois ; contrôle KO = rien (891.600776ms)
+✔ t15 journaux non modifiables : modification ou suppression refusées par la base (195.045034ms)
+✔ t16 transitions interdites : une pièce vendue ne peut pas revenir en stock par erreur (693.940019ms)
+✔ t17 produit en brouillon : invisible et impossible à acheter (216.247092ms)
+✔ t18 anti-abus : 2 réservations par client, 6e tentative en 10 min bloquée, autre client libre (953.756216ms)
+✔ t19 alertes sans doublon : 12 ventes, webhooks reçus 3 fois (3572.039716ms)
+✔ t20 Discord : aucune donnée personnelle ; panne = renvoi unique ; 5 échecs = une alerte de panne, jamais par Discord (615.992316ms)
+✔ t21 ancien lien 1.0 : vente décomptée une fois ; sans stock = alerte ; renvois sans doublon (551.04142ms)
+✔ t22 sauvegarde et restauration : base séparée, mêmes chiffres, protections actives (2741.498552ms)
+✔ t23 piège OR IGNORE : écriture normale refusée ; OR IGNORE sauterait le contrôle — interdit dans le code (370.199864ms)
+✔ t24 import des ventes passées : historique sans effet avant l’inventaire, décompte unique après (636.67322ms)
+✔ t25 dernière pièce réservée : « réservée temporairement », jamais SOLD OUT ; SOLD OUT après la vente (883.973343ms)
+✔ t26 réponse Stripe perdue : pièce gardée, session retrouvée par sa clé et gardée pour la reprise, fermée à l’échéance, aucune 2e session (399.486447ms)
+✔ t27 point relais : « disponible » distinct de « retiré », relance unique après 7 jours (543.546398ms)
+✔ t29 livre des recettes et données personnelles : export au centime, formule neutralisée, purge sans toucher à la compta (1231.86291ms)
+✔ U01 aujourd’hui : bande des pièces réelle, déclarations du fondateur, ventes 1.0 synchronisées, liste « à faire » calculée (8195.925401ms)
+✔ U02 commandes : filtres, détail réel, coordonnées sous Face ID, préparation, expédition, décision sur une commande à vérifier (5540.431603ms)
+✔ U03 remboursement et retour : décision du fondateur, idempotent, jamais de remise en stock sans contrôle physique (2738.24822ms)
+✔ U04 finances et exports : chiffres de la base, frais réels, investissement déclaré, exports journalisés (2593.684268ms)
+✔ U05 réglages : ouverture refusée tant qu’un prérequis manque, CGV publiées, seuil, codes régénérés, appareils (2713.643297ms)
+✔ U06 notifications, santé et historique : centre de notifications, canaux réels, contrôles, journal non modifiable (2447.592439ms)
+✔ U07 iPhone : abonnement validé, message chiffré (RFC 8291) déchiffrable par l’appareil, signature VAPID, appareil expiré gardé mais plus utilisé (505.864254ms)
+✔ U08 demandes et suivi : accusé de réception par e-mail après enregistrement, lien de suivi sans énumération, e-mails de commande (2143.530587ms)
+✔ U09 sauvegardes dans STUDIO : liste des copies vérifiées, téléchargement sous Face ID et journalisé, copie relisible par la seule clé privée (2802.545958ms)
+✔ U10 V13-B1 e-mail d’expédition : intention écrite avec l’événement « expédiée » ; panne de file réparée, une seule fois ; santé du site en alerte entre-temps (2058.807672ms)
+✔ U11 ventes 1.0 relues par lots : chaque appel de STUDIO sous 50 requêtes D1 et 50 appels externes, reprise exacte, rien compté deux fois (3529.512583ms)
+✔ U12 V14-R1 e-mail « à vérifier » : listé dans Santé sans donnée personnelle ; rapprochement confirmé par Face ID ; « Renvoyer » et « Il est parti » journalisés (2741.860469ms)
+✔ S01 inscription Face ID : code d’installation, passkey, 10 codes de secours affichés une fois, cookie sûr (5158.50405ms)
+✔ S02 connexion : refus si origine, domaine, Face ID, signature ou défi incorrects ; compteur qui recule = alerte (3472.427203ms)
+✔ S03 sessions : inactivité 12 h, durée 7 jours, déconnexion, tout fermer avec confirmation Face ID (2894.160151ms)
+✔ S04 code de secours : une fois, ferme tout, rouvre l’inscription 15 min, alerte ; mauvais codes limités (1892.43822ms)
+✔ S05 écritures STUDIO : origine étrangère ou en-tête manquant refusés ; lecture sans session = 401 (699.501657ms)
+✔ S06 inventaire guidé : confirmation Face ID, stock vérifié, écart avec 26, limite Stripe proposée, conflit détecté (1317.134125ms)
+✔ S07 récupération : sessions, défis et passkeys de l’ancienne génération invalidés atomiquement ; seule la nouvelle génération lit l’inventaire (2000.501193ms)
+✔ S08 récupération : page rechargée = nouveau défi pour le même appareil ; un second code invalide le premier appareil (1506.2394ms)
+✔ S09 codes tapés sur l’iPhone : casse, espaces, tirets et O/0, I/L/1 tolérés ; code d’installation trop court refusé (1757.033903ms)
+┌─────────┬───────────────────────────────────────────────────────┬───────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────┬────────┐
+│ (index) │ cas                                                   │ sayless                       │ bibliotheque                                                                      │ accord │
+├─────────┼───────────────────────────────────────────────────────┼───────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────┼────────┤
+│ 0       │ 'ES256 inscription valide'                            │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 1       │ 'ES256 inscription : autre origine'                   │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 2       │ 'ES256 inscription : autre domaine (RP ID)'           │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 3       │ 'ES256 inscription : sans présence (UP)'              │ 'refuse (user_presence)'      │ 'refuse (User presence was required, but user was not present)'                   │ 'oui'  │
+│ 4       │ 'ES256 inscription : sans vérification (UV)'          │ 'refuse (user_verification)'  │ 'refuse (User verification was required, but user could not be verified)'         │ 'oui'  │
+│ 5       │ 'ES256 inscription : autre défi'                      │ 'refuse (challenge)'          │ 'refuse (Unexpected registration response challenge "AAAAAAAAAAAAAAAAAAAAAAAAAA)' │ 'oui'  │
+│ 6       │ 'ES256 inscription : mauvais type'                    │ 'refuse (type)'               │ 'refuse (Unexpected registration response type: webauthn.get)'                    │ 'oui'  │
+│ 7       │ 'ES256 inscription : crossOrigin true'                │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 8       │ 'ES256 inscription : topOrigin présent'               │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 9       │ 'ES256 inscription : BS sans BE'                      │ 'refuse (backup_state)'       │ 'refuse (Single-device credential indicated that it was backed up, which should)' │ 'oui'  │
+│ 10      │ 'ES256 inscription : format packed sans preuve'       │ 'refuse (attestation_format)' │ 'refuse (No attestation signature provided in attestation statement (Packed))'    │ 'oui'  │
+│ 11      │ 'ES256 inscription : id différent de rawId'           │ 'refuse (credential_id)'      │ 'refuse (Credential ID was not base64url-encoded)'                                │ 'oui'  │
+│ 12      │ 'ES256 inscription : octets en trop'                  │ 'refuse (credential)'         │ 'refuse (Leftover bytes detected while parsing authenticator data)'               │ 'oui'  │
+│ 13      │ 'ES256 connexion valide (clé JWK convertie en COSE)'  │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 14      │ 'ES256 connexion : signature altérée'                 │ 'refuse (signature)'          │ 'refuse'                                                                          │ 'oui'  │
+│ 15      │ 'ES256 connexion : autre origine'                     │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 16      │ 'ES256 connexion : autre domaine (RP ID)'             │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 17      │ 'ES256 connexion : sans présence (UP)'                │ 'refuse (user_presence)'      │ 'refuse (User not present during authentication)'                                 │ 'oui'  │
+│ 18      │ 'ES256 connexion : sans vérification (UV)'            │ 'refuse (user_verification)'  │ 'refuse (User verification required, but user could not be verified)'             │ 'oui'  │
+│ 19      │ 'ES256 connexion : mauvais type'                      │ 'refuse (type)'               │ 'refuse (Unexpected authentication response type: webauthn.create)'               │ 'oui'  │
+│ 20      │ 'ES256 connexion : crossOrigin true'                  │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 21      │ 'ES256 connexion : compteur qui recule'               │ 'refuse'                      │ 'refuse (Response counter value 5 was lower than expected 5)'                     │ 'oui'  │
+│ 22      │ 'ES256 connexion : passkey synchronisée (0/0, BE+BS)' │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 23      │ 'RS256 inscription valide'                            │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 24      │ 'RS256 inscription : autre origine'                   │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 25      │ 'RS256 inscription : autre domaine (RP ID)'           │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 26      │ 'RS256 inscription : sans présence (UP)'              │ 'refuse (user_presence)'      │ 'refuse (User presence was required, but user was not present)'                   │ 'oui'  │
+│ 27      │ 'RS256 inscription : sans vérification (UV)'          │ 'refuse (user_verification)'  │ 'refuse (User verification was required, but user could not be verified)'         │ 'oui'  │
+│ 28      │ 'RS256 inscription : autre défi'                      │ 'refuse (challenge)'          │ 'refuse (Unexpected registration response challenge "AAAAAAAAAAAAAAAAAAAAAAAAAA)' │ 'oui'  │
+│ 29      │ 'RS256 inscription : mauvais type'                    │ 'refuse (type)'               │ 'refuse (Unexpected registration response type: webauthn.get)'                    │ 'oui'  │
+│ 30      │ 'RS256 inscription : crossOrigin true'                │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 31      │ 'RS256 inscription : topOrigin présent'               │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 32      │ 'RS256 inscription : BS sans BE'                      │ 'refuse (backup_state)'       │ 'refuse (Single-device credential indicated that it was backed up, which should)' │ 'oui'  │
+│ 33      │ 'RS256 inscription : format packed sans preuve'       │ 'refuse (attestation_format)' │ 'refuse (No attestation signature provided in attestation statement (Packed))'    │ 'oui'  │
+│ 34      │ 'RS256 inscription : id différent de rawId'           │ 'refuse (credential_id)'      │ 'refuse (Credential ID was not base64url-encoded)'                                │ 'oui'  │
+│ 35      │ 'RS256 inscription : octets en trop'                  │ 'refuse (credential)'         │ 'refuse (Leftover bytes detected while parsing authenticator data)'               │ 'oui'  │
+│ 36      │ 'RS256 connexion valide (clé JWK convertie en COSE)'  │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+│ 37      │ 'RS256 connexion : signature altérée'                 │ 'refuse (signature)'          │ 'refuse'                                                                          │ 'oui'  │
+│ 38      │ 'RS256 connexion : autre origine'                     │ 'refuse (origin)'             │ 'refuse (Unexpected response origin "https://exemple.test", expected one of: ht)' │ 'oui'  │
+│ 39      │ 'RS256 connexion : autre domaine (RP ID)'             │ 'refuse (rp_id)'              │ 'refuse (Unexpected RP ID hash)'                                                  │ 'oui'  │
+│ 40      │ 'RS256 connexion : sans présence (UP)'                │ 'refuse (user_presence)'      │ 'refuse (User not present during authentication)'                                 │ 'oui'  │
+│ 41      │ 'RS256 connexion : sans vérification (UV)'            │ 'refuse (user_verification)'  │ 'refuse (User verification required, but user could not be verified)'             │ 'oui'  │
+│ 42      │ 'RS256 connexion : mauvais type'                      │ 'refuse (type)'               │ 'refuse (Unexpected authentication response type: webauthn.create)'               │ 'oui'  │
+│ 43      │ 'RS256 connexion : crossOrigin true'                  │ 'refuse (cross_origin)'       │ 'accepte'                                                                         │ 'NON'  │
+│ 44      │ 'RS256 connexion : compteur qui recule'               │ 'refuse'                      │ 'refuse (Response counter value 5 was lower than expected 5)'                     │ 'oui'  │
+│ 45      │ 'RS256 connexion : passkey synchronisée (0/0, BE+BS)' │ 'accepte'                     │ 'accepte'                                                                         │ 'oui'  │
+└─────────┴───────────────────────────────────────────────────────┴───────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────┴────────┘
+✔ W01 SAYLESS et @simplewebauthn/server 14.1.0 : mêmes décisions sur 46 cas, sauf les réponses d’une autre origine (iframe) que SAYLESS seul refuse (229.213027ms)
+✔ A01 inscription : ES256 et RS256 acceptés ; chaque étape de la spécification refuse ce qui doit l’être (221.787706ms)
+✔ A02 connexion : signature, compteur, identifiant d’utilisateur et drapeaux vérifiés (116.947097ms)
+✔ A03 lecteur CBOR : entrées malformées, imbrication excessive, clés en double et longueurs impossibles refusées (0.781894ms)
+ℹ tests 114
+ℹ suites 0
+ℹ pass 114
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 118668.874532
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:integration
+> node --test tests/frontend-integration.test.mjs
+
+✔ catalogue publié, total disponible non plafonné et refus des variantes hors catalogue (3982.61631ms)
+✔ inventaire non confirmé, pause et panne D1 ferment le parcours (324.737036ms)
+✔ domicile, devis signé à 83,50 €, CGV et coordonnées demandées uniquement sur Stripe (563.26835ms)
+✔ relais du fournisseur, devis à 79,90 €, revalidation du point et panne sans solution fictive (548.889296ms)
+✔ le client et le serveur refusent hors zone, deux pièces et une taille épuisée (461.144884ms)
+✔ double clic puis perte de la réponse, même tentative et une seule réservation (536.198429ms)
+✔ confirmation avec la paire attendue, statut en attente puis paiement confirmé une seule fois (744.522405ms)
+✔ paramètres désactivés, CGV obsolètes et suivi indisponible donnent des refus explicites (785.615423ms)
+✔ v1.3 : changement serveur des CGV entre devis et paiement, nouveau consentement requis (328.813622ms)
+✔ v1.3 : réponse perdue et devis expiré, puis tentative payée retrouvée sans nouveau stock (678.343355ms)
+✔ v1.3 : adresses des relais identiques dans la recherche, le devis et la commande (506.34253ms)
+✔ v1.3 : suivi authentifié, jeton expiré et lien non énumérable avec e-mails simulés (941.763371ms)
+✔ v1.3 : contact, retour et rétractation enregistrés chiffrés, accusés en file sans vrai envoi (505.047938ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11386.201563

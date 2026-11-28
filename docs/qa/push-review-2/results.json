@@ -1,0 +1,46 @@
+{
+  "audited_commit": "56d960bda249ca1ca354c22349cdd364fc42501a",
+  "local_node": "v24.22.3",
+  "local_npm": "11.19.1",
+  "existing_tests": {
+    "passed": 277,
+    "failed": 0
+  },
+  "commercial_checks": {
+    "passed": 13,
+    "failed": 0
+  },
+  "new_tests": {
+    "passed": 6,
+    "failed": 4
+  },
+  "failed_acceptance_criteria": [
+    "P2-R1",
+    "P2-R2",
+    "P2-R3",
+    "P2-R4"
+  ],
+  "npm_audit": {
+    "full": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "production": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "cloudflare_deployed": false,
+  "physical_iphone_tested": false,
+  "hosted_cpu_measured": false,
+  "windows_founder_transport_error_reproduced": false,
+  "verdict": "NO GO TEST pour 56d960b en l’état"
+}

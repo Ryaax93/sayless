@@ -1,19 +1,23 @@
 # SAYLESS — Informations à confirmer avant l’ouverture des ventes
 
-État au 24 novembre 2026. Aucun paiement réel n’est activé par SAYLESS 2.0 ; le site officiel et ses réglages Stripe existants ne sont pas modifiés. Les paragraphes techniques du prototype ci-dessous sont à relire avec docs/ARCHITECTURE.md : Claude reprend le backend cible.
+État au 26 novembre 2026. Voir la [contre-revue v1.4](docs/REVUE-V1-4-WORK.md). Le comptage est déclaré ; l’inventaire actif reste à confirmer dans STUDIO. Paiements fermés.
 
 ## Données commerciales fournies
 
 | Élément | Valeur retenue |
 |---|---|
 | Prix unitaire | 75 € TTC hors livraison |
-| Stock restant théorique | 26 gilets ; inventaire physique et répartition par taille à confirmer |
+| Comptage physique déclaré | S : 8, M : 14, L : 5, total : 27 ; aucune pièce endommagée ; compté le 26 novembre 2026, activation STUDIO à confirmer |
 | Point relais | 4,90 € ; sélecteur réel non raccordé |
-| Colissimo domicile | 8,50 € |
-| Parcours | Coordonnées, puis livraison, puis total avant confirmation |
+| Domicile | 8,50 € envisagés ; transporteur et tarif à valider |
+| Parcours | Une pièce, livraison sur SAYLESS, devis et récapitulatif, CGV, vérification anti-abus, réservation puis coordonnées et paiement sur Stripe |
 | Un gilet livré | 79,90 € en relais prévu ; 83,50 € à domicile |
 
-La production initiale de 30 pièces est distincte des 26 pièces restantes : 2 pièces offertes et 2 vendues. Aucun stock par taille n’est inventé. Le total de 26 est théorique, pas encore issu d’un inventaire physique par variante. La branche v2 ne le présente plus comme une quantité disponible vérifiée. L’aperçu publié conserve sa version antérieure.
+La production initiale annoncée est de 30 pièces, avec 2 offertes et 2 vendues. Le chiffre antérieur de 26 était théorique. Le fondateur indique 27 pièces vendables après comptage : l’hypothèse d’un sample offert hors stock principal reste à confirmer. Ne pas corriger l’historique arbitrairement ni appliquer ce comptage à la production. Vérifier les ventes V1 postérieures au comptage, puis confirmer dans STUDIO.
+
+Pesées avec sachet : S environ 711 g, M 821 g, L 872 g. Emballage 55 × 45 cm ; épaisseur 10 cm uniquement pour simulation. Tranche jusqu’à 1 kg envisagée, à vérifier sur chaque colis final.
+
+Boxtal : compte créé, ticket n°2277409 en attente (éligibilité commerciale du compte particulier, API, tarifs, environnement de test). Simulation Bobigny → Bordeaux : Chrono 2Shop Direct environ 4,39 € TTC et Mondial Domicile France environ 7,48 € TTC. Aucune garantie nationale ; aucune intégration opérationnelle déclarée.
 
 ## Informations administratives
 
@@ -35,7 +39,7 @@ Les blocs « Éditeur du site » et « Hébergement » ont été retirés de l�
 ## Produit et stock
 
 - Coloris confirmé : rose uniquement. Modèle unisexe femme et homme. Conseil fourni par SAYLESS : S pour les personnes de petite taille.
-- Répartition interne des 26 pièces entre S, M et L, y compris les tailles à zéro. Aucun chiffre par taille n’est présenté aux clients ; seul le total est affiché dans la barre animée et sur la fiche. Le comptage physique fait autorité, même s’il diffère du total théorique. Claude initialisera la base cible après confirmation.
+- Répartition déclarée S8/M14/L5, à valider après rapprochement des ventes V1. Aucun chiffre par taille n’est présenté aux clients ; seul le total est affiché dans la barre animée et sur la fiche. Le comptage physique fait autorité, même s’il diffère du total théorique. Le fondateur confirmera l’inventaire dans STUDIO ; aucune migration de cette livraison ne précharge ces nombres.
 - Autres circuits de vente à synchroniser : ventes sur le site officiel, paiement par lien, remise en main propre, pièces offertes. Un événement Stripe non associé à une commande et une variante de cet aperçu ne peut pas être décompté automatiquement.
 - Aucun autre coloris à créer : les photos et le catalogue correspondent au rose Pink 001.
 - Composition confirmée : 80 % coton, 20 % polyester. Étiquette d’entretien à fournir.
@@ -54,23 +58,21 @@ Valeurs issues de l’ancien site, sans validation physique. Elles restent provi
 
 - Transporteur de point relais choisi, compte marchand et accès à sa documentation ; identifiant public du widget si nécessaire, configuration sécurisée des accès serveur.
 - Sélecteur à raccorder à de vrais relais avec nom, adresse et identifiant ; correction du choix et enregistrement dans la commande. Le tarif seul ne rend pas cette intégration opérationnelle.
-- Pays et territoires desservis, exclusions, délais de préparation et d’acheminement.
-- Application des tarifs aux paniers multiples et éventuelles variations par destination.
+- Zone confirmée au lancement : France métropolitaine hors Corse. Renseigner les délais de préparation et d’acheminement.
+- Une pièce par commande au lancement. Faire valider les deux tarifs par le transporteur après pesée du colis complet.
 - Adresse de retour et procédure d’échange à confirmer.
 - Frais de retour validés par SAYLESS : client pour changement d’avis ou de taille ; bordereau gratuit fourni après vérification en cas de mauvais article ou de défaut.
 - Délais conservés dans les textes : 14 jours pour déclarer la rétractation, puis 14 jours pour renvoyer. Le délai de 7 jours après validation et une interdiction absolue d’essayage ne sont pas utilisés pour restreindre le droit légal.
-- Réception effective de la rétractation en ligne, confirmation et accusé durable daté. Le brouillon e-mail actuel n’effectue pas cette transmission.
+- Réception effective de la rétractation en ligne, confirmation et accusé durable daté. Le formulaire utilise l’API et conserve une référence de réception ; l’envoi Resend réel reste à tester.
 
 Les clés secrètes devront être configurées dans l’espace sécurisé prévu à cet effet, jamais dans les fichiers publics du site.
 
 ## Commandes, paiement et données personnelles
 
-- Stripe : accès de test et secret de signature à configurer dans les variables sécurisées, jamais dans ce document ou le code public. Les clés réelles sont refusées par le code livré.
-- Réception des webhooks : l’aperçu est privé, sa barrière de connexion bloque un appel Stripe extérieur. Un point de réception serveur accessible à Stripe et authentifié par signature doit être déployé et testé avant toute synchronisation effective. Aucun accès public n’a été ouvert.
-- Validation de la mise en service réelle et des moyens de paiement acceptés, après une commande de test complète.
-- Politique des annulations, retours et remboursements. Le remboursement seul ne remet jamais automatiquement une pièce en stock ; un retour physique revendable doit être confirmé séparément.
-- Commandes réelles, confirmations par e-mail, facturation et suivi des envois restent à raccorder. La base, les opérations de stock et la gestion de commandes isolées de test sont implémentées.
-- Durées de conservation et purge des identités administrateur, commandes et journaux : aucune purge automatique n’est encore configurée.
+- Les corrections B1/B2/C1 sont vérifiées localement. Reste le cas V14-R1 (doublon d’e-mail après panne prolongée), la recette externe et la validation du texte juridique archivé.
+- Préparer D1 hébergée de test, Stripe test, réception des webhooks signés, Turnstile et les tests sur iPhone avec l’accord du fondateur. Aucune clé ni donnée client dans le dépôt.
+- Confirmer les wallets compatibles, le transporteur, les e-mails transactionnels, les preuves de réception, l’étiquette, le suivi et la restauration.
+- Choisir et valider les durées de conservation. Le mécanisme proposé dans la PR de Claude demeure désactivé tant que les durées ne sont pas approuvées.
 - Prestataires réels : hébergement, paiement, transport, e-mails, service client et éventuelles statistiques.
 - Pour chaque traitement : finalité, base légale, champs nécessaires, destinataires, conservation, pays de traitement et garanties en cas de transfert.
 - Identité du responsable et procédure pour les demandes d’exercice des droits.

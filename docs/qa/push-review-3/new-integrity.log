@@ -1,0 +1,13 @@
+✔ P3-A1 DB explicite, sans repli : réponse de validation perdue et concurrence, jeton réellement stocké réutilisé (1289.388195ms)
+ℹ Repli désactivé ; 1 réponse perdue, 3 succès identiques, reprise froide et rotation vérifiées. Aucun jeton affiché.
+✔ P3-A2 migration 0011 : session et passkey existantes utilisables, sauvegarde chiffrée restaurée sans jeton VAPID (1751.601387ms)
+✔ P3-A3 cron réel : quatre services push, succès et refus mêlés, budget gratuit et absence de cascade (2541.577803ms)
+ℹ Quatre audiences, 12 messages et 1 notice de configuration, 52 appels simulés ; max 39 requêtes D1 et 16 appels externes par cron. CPU hébergé non mesuré.
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6321.779156

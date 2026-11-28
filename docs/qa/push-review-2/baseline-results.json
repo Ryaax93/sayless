@@ -1,0 +1,72 @@
+[
+  {
+    "step": "npm-test",
+    "exit_code": 0,
+    "seconds": 130.5
+  },
+  {
+    "step": "review",
+    "exit_code": 0,
+    "seconds": 5.8
+  },
+  {
+    "step": "review-v13",
+    "exit_code": 0,
+    "seconds": 5.3
+  },
+  {
+    "step": "review-v14",
+    "exit_code": 0,
+    "seconds": 7.9
+  },
+  {
+    "step": "review-risks",
+    "exit_code": 0,
+    "seconds": 6.4
+  },
+  {
+    "step": "review-push",
+    "exit_code": 0,
+    "seconds": 27.3
+  },
+  {
+    "step": "review-d1",
+    "exit_code": 0,
+    "seconds": 56.0
+  },
+  {
+    "step": "webauthn",
+    "exit_code": 0,
+    "seconds": 22.9
+  },
+  {
+    "step": "build-storefront",
+    "exit_code": 0,
+    "seconds": 0.4
+  },
+  {
+    "step": "build-test",
+    "exit_code": 0,
+    "seconds": 0.2
+  },
+  {
+    "step": "build-cloudflare",
+    "exit_code": 0,
+    "seconds": 9.4
+  },
+  {
+    "step": "free-plan",
+    "exit_code": 0,
+    "seconds": 0.1
+  },
+  {
+    "step": "audit",
+    "exit_code": 0,
+    "seconds": 4.6
+  },
+  {
+    "step": "audit-prod",
+    "exit_code": 0,
+    "seconds": 3.6
+  }
+]

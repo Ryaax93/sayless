@@ -5,7 +5,6 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const main = $('#main');
 const CART_KEY = 'sayless-preview-cart-v1';
 const PRODUCT = SaylessCommerce.product;
-const SHIPPING = SaylessCommerce.shipping;
 const CART_TTL = 30 * 24 * 60 * 60 * 1000;
 const GALLERY = [
   {src: '/store/assets/hoodie-front.webp', alt: 'Le zip hoodie rose SAYLESS vu de face, avec sa broderie sur la poitrine'},
@@ -14,14 +13,12 @@ const GALLERY = [
 ];
 const money = value => new Intl.NumberFormat('fr-FR', {style: 'currency', currency: 'EUR', maximumFractionDigits: 2}).format(value);
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let checkout = {step:'details',details:null,shipping:null};
 let selectedSize = null;
 const selectedColor = 'Rose';
 let galleryIndex = 0;
 let cart = readCart();
 let toastTimer;
 let productObserver;
-let lastDemoOrder = null;
 let previousDialogFocus = null;
 
 function normalizeCart(value) {
@@ -32,10 +29,9 @@ function normalizeCart(value) {
     if(item.color&&item.color!=='Rose')continue;
     const color='Rose';
     const key=color+'|'+item.size;
-    const existing=grouped.get(key);
-    grouped.set(key,{size:item.size,color,variantId:typeof item.variantId==='string'?item.variantId:null,quantity:Math.min(5,(existing?.quantity||0)+item.quantity)});
+    grouped.set(key,{size:item.size,color,variantId:typeof item.variantId==='string'?item.variantId:null,quantity:1});
   }
-  return [...grouped.values()].slice(0,12);
+  return [...grouped.values()].slice(0,1);
 }
 function readCart() {
   try {
@@ -79,13 +75,13 @@ const lockIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10"
 const careLinks = [
   ['aide','Questions fréquentes'], ['tailles','Guide des tailles'], ['livraison','Livraison'],
   ['retours','Retours & rétractation'], ['contact','Nous contacter'],
-  ['confidentialite','Confidentialité'], ['cookies','Cookies'], ['mentions-legales','Mentions légales'], ['cgv','Conditions générales de vente']
+  ['suivi','Suivi de commande'], ['confidentialite','Confidentialité'], ['cookies','Cookies'], ['mentions-legales','Mentions légales'], ['cgv','Conditions générales de vente']
 ];
 const faqData = [
   ['Comment taille le Pink 001 ?', 'Le gilet rose est unisexe, pour femmes et hommes, avec une coupe oversize en S, M et L. Pour les personnes de petite taille, nous recommandons le S. Consulte le <a href="#/tailles">guide des tailles</a> pour comparer les mesures à un vêtement que tu portes déjà.'],
-  ['Y aura-t-il un restock ?', 'Le premier drop a été produit en 30 exemplaires, sans réassort prévu. La disponibilité est indiquée sur la fiche produit. Le parcours de démonstration ne réserve aucune pièce.'],
-  ['La livraison est-elle comprise ?', 'Le hoodie est à 75 € TTC, hors livraison. Les tarifs prévus sont de 4,90 € en point relais et 8,50 € par Colissimo à domicile. Le choix vient après tes coordonnées, avant le total final. Le point relais reste indisponible tant que son sélecteur réel n’est pas raccordé.'],
-  ['Puis-je essayer le parcours d’achat ?', 'Oui. Choisis une taille, ajoute le hoodie au panier, renseigne des coordonnées d’essai puis choisis la livraison à domicile pour voir le total. La confirmation est une simulation : aucune carte bancaire, aucun paiement et aucune commande réelle ne sont enregistrés.'],
+  ['Y aura-t-il un restock ?', 'Le premier drop a été produit en 30 exemplaires, sans réassort prévu. La disponibilité est indiquée sur la fiche produit. Les pièces en cours de paiement sont distinguées des ruptures définitives.'],
+  ['La livraison est-elle comprise ?', 'Le hoodie est à 75 € TTC, hors livraison. Les tarifs prévus sont de 4,90 € en point relais et 8,50 € par Colissimo à domicile. Choisis ta livraison sur SAYLESS et vérifie le récapitulatif. Tes coordonnées seront demandées sur Stripe. France métropolitaine hors Corse ; tarifs sous réserve de validation du transporteur.'],
+  ['Comment se passe la commande ?', 'Une pièce par commande pour le DROP 01. Choisis ta taille, puis la livraison et un point relais si nécessaire. Vérifie le total TTC et les conditions de vente avant de continuer sur Stripe. Les paiements restent désactivés sur cet aperçu de préparation.'],
   ['Comment faire un retour ?', 'La page <a href="#/retours">Retours & rétractation</a> explique les étapes prévues pour la boutique et permet de préparer un message. Pour une commande déjà passée, contacte directement <a href="mailto:SayLe2s@outlook.com">SayLe2s@outlook.com</a> avec sa référence.'],
   ['Comment prendre soin de mon hoodie ?', 'Suis en priorité l’étiquette d’entretien du vêtement. Pour préserver la broderie et le motif, évite de repasser directement sur les décorations. Les consignes complètes seront ajoutées après vérification de l’étiquette.']
 ];
@@ -107,24 +103,27 @@ function legalLayout(route,title,description,content) {
 function soldOutNotice() {
   return '<section class="drop-complete" data-drop-sold-out hidden aria-live="polite"><span class="eyebrow">SAYLESS · PREMIER CHAPITRE</span><h2>DROP 01 — SOLD OUT.</h2><p>Merci à tous ceux qui ont participé au premier chapitre de SAYLESS. Ce n’est que le début.</p><p>Restez connectés sur Instagram : <a href="https://www.instagram.com/sayless.brand/" target="_blank" rel="noopener noreferrer">@sayless.brand</a></p><strong>SAY LESS. DO MORE.</strong></section>';
 }
+function pausedNotice() {
+  return '<section class="drop-complete drop-paused" data-drop-paused hidden aria-live="polite"><h2>DROP 01 — TEMPORARILY UNAVAILABLE.</h2><p>La boutique est momentanément indisponible. Retrouvez-nous prochainement sur saylessbrand.fr.</p><p>Instagram : <a href="https://www.instagram.com/sayless.brand/" target="_blank" rel="noopener noreferrer">@sayless.brand</a></p><strong>SAY LESS. DO MORE.</strong></section>';
+}
 function home() {
   return `<section class="hero" aria-labelledby="hero-title">
     <div class="hero-copy"><span class="eyebrow">STREETWEAR INDÉPENDANT · PARIS</span><h1 id="hero-title"><span>SAY LESS.</span><span class="pink">DO MORE.</span></h1><p class="hero-description">Un zip oversize unisexe. Un rose signature.<br>Le premier chapitre de SAYLESS.</p><div class="hero-action"><a class="button button-light" href="#/produit">Découvrir le hoodie</a><div class="hero-price">75 €<span>TTC · hors livraison</span></div></div><div class="hero-specs"><span>350 GSM</span><span>COUPE OVERSIZE</span><span>S · M · L</span></div></div>
     <div class="hero-image"><img src="/store/assets/campaign.webp" width="813" height="1000" alt="Deux personnes portent le zip hoodie rose SAYLESS en ville" fetchpriority="high"><div class="hero-photo-caption"><span class="eyebrow">LE ROSE SORT<br>DU CADRE.</span><strong>PINK 001</strong></div></div>
   </section>
-  <section class="marquee" aria-label="Disponibilité du premier drop SAYLESS"><span class="sr-only" data-stock-accessible role="status">Vérification du stock…</span><div class="marquee-window"><div class="marquee-track">${[0,1].map(()=>`<div class="marquee-group" aria-hidden="true"><span class="marquee-stock" data-stock-ticker>VÉRIFICATION DU STOCK</span><img src="/store/assets/logo.webp" width="112" height="56" alt=""><span>SAY LESS. DO MORE.</span><img src="/store/assets/logo.webp" width="112" height="56" alt=""><span>DROP 01 · SAYLESS PARIS</span><img src="/store/assets/logo.webp" width="112" height="56" alt=""></div>`).join('')}</div></div><button type="button" class="marquee-control" data-marquee-toggle aria-label="Mettre le défilement en pause" aria-pressed="false">Pause</button></section>
-  ${soldOutNotice()}<section class="section product-feature" aria-labelledby="feature-title"><figure class="feature-image"><img src="/store/assets/hoodie-front.webp" width="804" height="1000" alt="Détail du zip et de la broderie poitrine du hoodie rose" loading="lazy"><figcaption class="photo-label"><span>LE ZIP. LE ROSE. LE DÉTAIL.</span><span>SAYLESS · PARIS</span></figcaption></figure><div class="feature-copy"><span class="eyebrow">UNE PIÈCE. TOUTE L’ATTITUDE.</span><h2 id="feature-title">TON PROCHAIN<br><span>ESSENTIEL.</span></h2><p>Une coupe ample, une matière de 350 g/m² et le logo brodé côté cœur. Devant, le détail. Dans le dos, le motif qui fait la différence.</p><div class="feature-details"><div><strong>350 GSM</strong><span>Une matière avec de la tenue</span></div><div><strong>OVERSIZE</strong><span>De l’aisance, à ta façon</span></div></div><div class="feature-price"><a class="button" href="#/produit">Voir le Pink 001</a><span>75 €<small>TTC · hors livraison</small></span></div></div></section>
+  <section class="marquee" aria-label="Disponibilité du premier drop SAYLESS"><span class="sr-only" data-stock-accessible role="status">Stock à confirmer</span><div class="marquee-window"><div class="marquee-track">${[0,1].map(()=>`<div class="marquee-group" aria-hidden="true"><span class="marquee-stock" data-stock-ticker>STOCK À CONFIRMER</span><img src="/store/assets/logo.webp" width="112" height="56" alt=""><span>SAY LESS. DO MORE.</span><img src="/store/assets/logo.webp" width="112" height="56" alt=""><span>DROP 01 · SAYLESS PARIS</span><img src="/store/assets/logo.webp" width="112" height="56" alt=""></div>`).join('')}</div></div><button type="button" class="marquee-control" data-marquee-toggle aria-label="Mettre le défilement en pause" aria-pressed="false">Pause</button></section>
+  ${soldOutNotice()}${pausedNotice()}<section class="section product-feature" aria-labelledby="feature-title"><figure class="feature-image"><img src="/store/assets/hoodie-front.webp" width="804" height="1000" alt="Détail du zip et de la broderie poitrine du hoodie rose" loading="lazy"><figcaption class="photo-label"><span>LE ZIP. LE ROSE. LE DÉTAIL.</span><span>SAYLESS · PARIS</span></figcaption></figure><div class="feature-copy"><span class="eyebrow">UNE PIÈCE. TOUTE L’ATTITUDE.</span><h2 id="feature-title">TON PROCHAIN<br><span>ESSENTIEL.</span></h2><p>Une coupe ample, une matière de 350 g/m² et le logo brodé côté cœur. Devant, le détail. Dans le dos, le motif qui fait la différence.</p><div class="feature-details"><div><strong>350 GSM</strong><span>Une matière avec de la tenue</span></div><div><strong>OVERSIZE</strong><span>De l’aisance, à ta façon</span></div></div><div class="feature-price"><a class="button" href="#/produit">Voir le Pink 001</a><span>75 €<small>TTC · hors livraison</small></span></div></div></section>
   <section class="section dark-section" aria-labelledby="lookbook-home"><div class="section-head"><div><span class="eyebrow">LE LOOKBOOK</span><h2 id="lookbook-home">LA RUE LUI VA BIEN.</h2></div><a class="text-link" href="#/lookbook">Explorer le lookbook</a></div><div class="lookbook-grid"><figure><a href="#/lookbook"><img src="/store/assets/campaign.webp" width="813" height="1000" alt="Le hoodie rose porté à deux" loading="lazy"></a><figcaption>DEHORS. ENSEMBLE.</figcaption></figure><figure><a href="#/lookbook"><img src="/store/assets/hoodie-back.webp" width="811" height="999" alt="Le motif du hoodie vu de dos" loading="lazy"></a><figcaption class="center-caption">LE DOS NE FAIT PAS SEMBLANT.</figcaption></figure><figure><a href="#/lookbook"><img src="/store/assets/hoodie-front.webp" width="804" height="1000" alt="La broderie poitrine du Pink 001" loading="lazy"></a><figcaption>LES DÉTAILS COMPTENT.</figcaption></figure></div></section>
   <section class="manifesto" aria-labelledby="manifesto-title"><div><span class="eyebrow">LE DÉBUT DE QUELQUE CHOSE.</span><h2 id="manifesto-title">FAIS À<br>TA FAÇON.</h2></div><div class="manifesto-copy"><p>SAYLESS, c’est une marque indépendante à Paris. Pour ce premier drop, on commence avec un hoodie rose, une coupe oversize et 30 pièces produites. Une idée qui se porte enfin.</p><a href="#/histoire" class="text-link">L’histoire de SAYLESS</a></div></section>
   <section class="section faq-section" aria-labelledby="faq-home-title"><div class="faq-heading"><span class="eyebrow">AVANT DE TE LANCER</span><h2 id="faq-home-title">ON TE DIT TOUT.</h2><p>La coupe, les tailles, la livraison.<br>Les réponses, au même endroit.</p><a class="text-link" href="#/aide">Toutes les questions</a></div>${faqMarkup(faqData.slice(0,3))}</section>`;
 }
 function productPage() {
   return `<div class="product-page"><nav class="breadcrumb" aria-label="Fil d’Ariane"><a href="#/">Accueil</a><span>/</span><span>Drop 01</span><span>/</span><span>Pink 001</span></nav><div class="product-layout"><div class="product-gallery"><div class="gallery-main"><button class="image-button" data-zoom-current aria-label="Agrandir la photo du hoodie"><img id="product-image" src="${GALLERY[galleryIndex].src}" width="804" height="1000" alt="${GALLERY[galleryIndex].alt}" fetchpriority="high"></button><span class="zoom-hint">Agrandir +</span></div><div class="gallery-thumbs" aria-label="Choisir une photo">${GALLERY.map((photo,i)=>`<button data-gallery="${i}" aria-pressed="${i===galleryIndex}" aria-label="${['Voir le hoodie de face','Voir le hoodie de dos','Voir le hoodie porté'][i]}"><img src="${photo.src}" width="80" height="100" alt=""></button>`).join('')}</div></div>
-    <div class="product-info"><span class="eyebrow">SAYLESS · PREMIER DROP</span><h1>ZIP HOODIE<span>PINK 001.</span></h1><div class="price-row"><strong>75 € TTC</strong><span>hors livraison</span></div><div class="stock-panel" id="product-stock" aria-live="polite"><p data-stock-count>Vérification du stock…</p><p data-stock-note></p></div>${soldOutNotice()}<p class="product-intro">Un gilet rose unisexe, pour femmes et hommes. Une coupe oversize, une broderie côté cœur et un motif au dos qui se remarque.</p><div class="color-row"><span class="color-swatch" aria-hidden="true"></span><span class="label">Rose signature · Unisexe</span></div><div id="size-selector"><div class="size-label"><span class="label">Ta taille${selectedSize ? ' : '+selectedSize : ''}</span><button class="text-link" data-size-guide>Guide des tailles</button></div><div class="size-options" role="group" aria-label="Choisir une taille">${PRODUCT.sizes.map(size=>`<button class="size-option" data-size="${size}" aria-pressed="${selectedSize===size}">${size}</button>`).join('')}</div><p id="size-error" class="size-error" role="status"></p></div><button class="button add-button" id="add-to-cart"><span>Ajouter au panier</span><span>75 €</span></button><div class="product-service">${lockIcon}<span>Aperçu interactif · Aucun paiement réel</span></div>
+    <div class="product-info"><span class="eyebrow">SAYLESS · PREMIER DROP</span><h1>ZIP HOODIE<span>PINK 001.</span></h1><div class="price-row"><strong>75 € TTC</strong><span>hors livraison</span></div><div class="stock-panel" id="product-stock" aria-live="polite"><p data-stock-count>Vérification du stock…</p><p data-stock-note></p></div>${soldOutNotice()}${pausedNotice()}<p class="product-intro">Un gilet rose unisexe, pour femmes et hommes. Une coupe oversize, une broderie côté cœur et un motif au dos qui se remarque.</p><div class="color-row"><span class="color-swatch" aria-hidden="true"></span><span class="label">Rose signature · Unisexe</span></div><div id="size-selector"><div class="size-label"><span class="label">Ta taille${selectedSize ? ' : '+selectedSize : ''}</span><button class="text-link" data-size-guide>Guide des tailles</button></div><div class="size-options" role="group" aria-label="Choisir une taille">${PRODUCT.sizes.map(size=>`<button class="size-option" data-size="${size}" aria-pressed="${selectedSize===size}">${size}</button>`).join('')}</div><p id="size-error" class="size-error" role="status"></p></div><button class="button add-button" id="add-to-cart"><span>Ajouter au panier</span><span>75 €</span></button><div class="product-service">${lockIcon}<span>Aperçu interactif · Aucun paiement réel</span></div>
     ${faqMarkup([
       ['Les détails du hoodie','Zip hoodie unisexe rose pastel, coupe oversize. Matière de 350 g/m² : 80 % coton et 20 % polyester. Fermeture YKK, capuche doublée, logo brodé côté cœur et grand motif imprimé au dos.'],
       ['Bien choisir sa taille','Un modèle unisexe en S, M et L. Pour les personnes de petite taille, nous recommandons le S. Le <a href="#/tailles">guide des tailles</a> reprend les mesures du site actuel ; leur méthode de prise reste à vérifier avant la mise en vente.'],
-      ['Livraison & retours','Le hoodie coûte 75 € TTC, hors livraison : 4,90 € en point relais ou 8,50 € par Colissimo à domicile. Les destinations et délais restent à confirmer. Le sélecteur de point relais est encore indisponible dans cet aperçu. Consulte les pages <a href="#/livraison">Livraison</a> et <a href="#/retours">Retours</a>.'],
+      ['Livraison & retours','Le hoodie coûte 75 € TTC, hors livraison : 4,90 € en point relais ou 8,50 € par Colissimo à domicile. France métropolitaine hors Corse pour le moment. Le choix d’un relais dépend de la connexion au transporteur. Les tarifs et délais restent à valider avec lui. Consulte les pages <a href="#/livraison">Livraison</a> et <a href="#/retours">Retours</a>.'],
       ['Prendre soin de ta pièce','Suis les indications de l’étiquette d’entretien. Évite de repasser directement sur la broderie et le motif imprimé.']
     ])}</div></div></div>
     <section class="section product-detail-section"><div><span class="eyebrow">DEVANT, LE DÉTAIL. DERRIÈRE, LE CARACTÈRE.</span><h2>VU DE DOS.<br>RECONNU PARTOUT.</h2><p>Un grand motif, des touches de rose et une silhouette ample. Le Pink 001 se porte zippé ou ouvert, avec les pièces que tu aimes déjà.</p><div class="inline-features"><div><strong>BRODERIE</strong><span>Le logo côté cœur</span></div><div><strong>MOTIF AU DOS</strong><span>La signature du premier drop</span></div></div></div><button class="image-button plain-image-button" data-zoom="1" aria-label="Agrandir le motif au dos"><img src="/store/assets/hoodie-back.webp" width="811" height="999" alt="Vue de dos du hoodie SAYLESS et de son motif" loading="lazy"></button></section>
@@ -136,47 +135,53 @@ function lookbookPage() {
   <div class="editorial-grid"><figure><button data-zoom="2" aria-label="Agrandir la photo du hoodie porté à deux"><img src="/store/assets/campaign.webp" width="813" height="1000" alt="Deux personnes portent le hoodie rose dans la rue"></button><figcaption>LE ROSE SE PORTE À PLUSIEURS.</figcaption></figure><figure><button data-zoom="1" aria-label="Agrandir la photo de dos"><img src="/store/assets/hoodie-back.webp" width="811" height="999" alt="Le motif du hoodie rose, de dos"></button><figcaption>TOUT EST DANS LE DOS.</figcaption></figure><figure><button data-zoom="0" aria-label="Agrandir la photo de face"><img src="/store/assets/hoodie-front.webp" width="804" height="1000" alt="Détail de la broderie et du zip" loading="lazy"></button><figcaption class="editorial-caption"><span class="eyebrow pink">PINK 001 · 350 GSM · OVERSIZE</span><h2>FAIT POUR<br>ÊTRE PORTÉ.</h2><p>Un logo brodé, un zip, une coupe ample. À toi d’écrire la suite.</p><a class="button button-light" href="#/produit">Découvrir le Pink 001</a></figcaption></figure></div></div>`;
 }
 function storyPage() {
-  return pageTitle('INDÉPENDANT · PARIS','UNE IDÉE.<br>UN PREMIER DROP.','SAYLESS commence ici, avec une pièce et l’envie de la voir vivre.') + `<section class="story-layout"><img src="/store/assets/hoodie-back.webp" width="811" height="999" alt="Le motif du premier hoodie SAYLESS"><div class="story-copy"><span class="eyebrow">SAY LESS. DO MORE.</span><h2>MOINS DE MOTS.<br>PLUS DE TOI.</h2><p>Pour le premier chapitre de SAYLESS, on a choisi un zip hoodie rose. Une silhouette oversize, le logo brodé sur la poitrine et un grand motif dans le dos.</p><p>La marque est indépendante et basée à Paris. Ce drop a été produit en 30 pièces, sans réassort prévu.</p><p>Ce qui nous intéresse maintenant ? Voir cette pièce portée à ta façon, avec ton style et dans ton quotidien.</p><p class="signature">LE DÉBUT DE LA SUITE.</p><a class="button" href="#/produit">Découvrir le premier drop</a></div></section><section class="story-note"><div><span class="eyebrow">ON SE RETROUVE LÀ-BAS.</span><h2>TON STYLE.<br>NOTRE PREMIER CHAPITRE.</h2></div><a class="button button-outline" href="https://www.instagram.com/sayless.off/" target="_blank" rel="noopener noreferrer">SAYLESS sur Instagram</a></section>`;
+  return pageTitle('INDÉPENDANT · PARIS','UNE IDÉE.<br>UN PREMIER DROP.','SAYLESS commence ici, avec une pièce et l’envie de la voir vivre.') + `<section class="story-layout"><img src="/store/assets/hoodie-back.webp" width="811" height="999" alt="Le motif du premier hoodie SAYLESS"><div class="story-copy"><span class="eyebrow">SAY LESS. DO MORE.</span><h2>MOINS DE MOTS.<br>PLUS DE TOI.</h2><p>Pour le premier chapitre de SAYLESS, on a choisi un zip hoodie rose. Une silhouette oversize, le logo brodé sur la poitrine et un grand motif dans le dos.</p><p>La marque est indépendante et basée à Paris. Ce drop a été produit en 30 pièces, sans réassort prévu.</p><p>Ce qui nous intéresse maintenant ? Voir cette pièce portée à ta façon, avec ton style et dans ton quotidien.</p><p class="signature">LE DÉBUT DE LA SUITE.</p><a class="button" href="#/produit">Découvrir le premier drop</a></div></section><section class="story-note"><div><span class="eyebrow">ON SE RETROUVE LÀ-BAS.</span><h2>TON STYLE.<br>NOTRE PREMIER CHAPITRE.</h2></div><a class="button button-outline" href="https://www.instagram.com/sayless.brand/" target="_blank" rel="noopener noreferrer">SAYLESS sur Instagram</a></section>`;
 }
 function sizeGuideContent(modal = false) {
   return `${modal?'<span class="eyebrow">PINK 001 · COUPE OVERSIZE</span><h2 id="size-title">TA TAILLE,<br>TON STYLE.</h2>':'<h2>Le tableau des mesures</h2>'}<p>Mesures en centimètres reprises du site SAYLESS actuel. Leur exactitude sur les pièces vendues reste à confirmer.</p><div class="table-scroll"><table class="size-table"><caption class="sr-only">Mesures du hoodie Pink 001 en centimètres</caption><thead><tr><th scope="col">Taille</th><th scope="col">Longueur</th><th scope="col">Poitrine</th><th scope="col">Épaules</th></tr></thead><tbody><tr><th scope="row">S</th><td>71</td><td>63</td><td>58</td></tr><tr><th scope="row">M</th><td>74</td><td>69</td><td>63</td></tr><tr><th scope="row">L</th><td>76</td><td>74</td><td>67</td></tr></tbody></table></div><div class="notice">Tableau provisoire : « poitrine » est le libellé d’origine et ne doit pas être interprété comme un tour de poitrine. La méthode de mesure et les valeurs doivent être confirmées sur ce modèle. Si tu hésites, <a href="#/contact">demande-nous conseil</a>.</div><div class="size-advice"><h3>Pour choisir ta coupe</h3><p><strong>Un seul modèle, unisexe : femme et homme.</strong> Pour les personnes de petite taille, nous recommandons le <strong>S</strong>. Le rendu reste oversize.</p><p>Prends un hoodie dont tu aimes le volume et pose-le à plat, sans l’étirer. Note sa longueur, sa largeur sous les aisselles et la distance entre les coutures d’épaules. Compare ensuite avec le tableau une fois sa méthode confirmée.</p><p>Les lettres S, M et L ne suffisent pas à garantir le rendu. Si tu hésites, demande conseil en précisant la coupe souhaitée et les mesures de ton vêtement de référence.</p></div>${modal?'':'<div class="size-illustration"><svg viewBox="0 0 140 130" aria-hidden="true"><path d="m48 18-22 12-20 45 23 11 13-27v60h56V59l13 27 23-11-20-45-22-12c-4 17-40 17-44 0ZM70 30v89M43 58h54"/><path d="M50 8h40M105 36v76" stroke-dasharray="3 3"/></svg><span>Le schéma est indicatif. Compare la coupe à un hoodie que tu portes déjà, une fois la méthode de mesure confirmée.</span></div>'+supportCallout()}`;
 }
-function contactForm(isReturn = false) {
-  return `<form id="message-form" data-kind="${isReturn?'return':'contact'}"><div class="form-grid"><div class="field"><label for="contact-name">Ton nom <span class="small-text">(facultatif)</span></label><input id="contact-name" name="name" autocomplete="name" maxlength="100" placeholder="Ton prénom et ton nom"></div><div class="field"><label for="contact-order">N° de commande <span class="small-text">(facultatif)</span></label><input id="contact-order" name="order" maxlength="80" placeholder="Si tu as déjà commandé"></div></div>${isReturn?'':`<div class="field"><label for="contact-subject">Ta question concerne</label><select id="contact-subject" name="subject"><option>Une taille ou le produit</option><option>Une commande existante</option><option>La livraison</option><option>Un retour</option><option>Autre chose</option></select></div>`}<div class="field"><label for="contact-message">Ton message</label><textarea id="contact-message" name="message" required minlength="5" maxlength="2500" placeholder="${isReturn?'Précise la commande et la pièce concernées.':'Dis-nous ce qu’on peut faire pour toi.'}"></textarea></div><button type="submit" class="button">Préparer mon e-mail</button><p class="small-text" style="margin-top:16px">Rien n’est envoyé depuis ce formulaire. Tu pourras relire ton message et ouvrir ta messagerie pour l’envoyer.</p><div id="form-result" class="form-result" hidden tabindex="-1" aria-live="polite"></div></form>`;
-}
+function contactForm(isReturn = false) { return window.SaylessService.form(isReturn ? 'return' : 'contact'); }
+
 function infoPage(route) {
   const legal=legalContent(route);
   if(legal) return legalLayout(route,legal.title,legal.description,legal.content);
   const map={
     aide:['LES RÉPONSES,<br>SANS DÉTOUR.','Avant de choisir ta pièce, on répond aux questions qui comptent.',faqMarkup()+supportCallout()],
     tailles:['LA BONNE<br>TAILLE POUR TOI.','Pink 001 est un gilet rose unisexe à la coupe oversize, proposé en S, M et L.',sizeGuideContent()],
-    contact:['ON SE<br>PARLE ?','Une question sur le hoodie, une taille ou ta commande ? Écris-nous.',`<div class="contact-card"><span>LE CONTACT SAYLESS</span><a href="mailto:SayLe2s@outlook.com">SayLe2s@outlook.com</a></div><h2>Prépare ton message</h2>${contactForm()}`]
+    contact:['ON SE<br>PARLE ?','Une question sur le hoodie, une taille ou ta commande ? Écris-nous.',`<div class="contact-card"><span>LE CONTACT SAYLESS</span><a href="mailto:SayLe2s@outlook.com">SayLe2s@outlook.com</a></div><h2>Ton message</h2>${contactForm()}`]
   };
   if(!map[route]) return null;
   return helpLayout(route,...map[route]);
 }
-function orderLines(items) {
-  return items.map(item=>`<div class="order-line"><img src="/store/assets/hoodie-front.webp" width="75" height="96" alt="Zip Hoodie Pink 001"><div><strong>Zip Hoodie Pink 001</strong><p>${escapeHTML(item.color||'Rose')} · Taille ${item.size}<br>Quantité : ${item.quantity}</p></div><span>${money(item.quantity*PRODUCT.price)}</span></div>`).join('');
+function currentRoute() {
+  if(location.hash)return location.hash.replace(/^#\/?/,'').split('?')[0].replace(/\/$/,'')||'accueil';
+  return ({'/merci':'confirmation','/commande-annulee':'commande-annulee','/suivi':'suivi'})[location.pathname.replace(/\/$/,'')]||'accueil';
 }
-function currentRoute() { return (location.hash.replace(/^#\/?/,'').split('?')[0].replace(/\/$/,'') || 'accueil'); }
 function render() {
+  delete main.dataset.paymentStatus;
+  window.SaylessCheckoutUI.unmount();
+  window.SaylessService.unmount();
+  window.SaylessService.capture();
   closeMenu();
   closeDialogs(false);
   if (productObserver) productObserver.disconnect();
   const route = currentRoute();
   document.body.classList.toggle('legal-view',['mentions-legales','cgv','confidentialite','cookies','livraison','retours'].includes(route));
-  const pages = {accueil:home,produit:productPage,lookbook:lookbookPage,histoire:storyPage,paiement:checkoutPage,confirmation:confirmationPage,gestion:()=>window.SaylessAdmin.page()};
+  const pages = {accueil:home,produit:productPage,lookbook:lookbookPage,histoire:storyPage,paiement:checkoutPage,confirmation:confirmationPage,'commande-annulee':cancellationPage,suivi:trackingPage};
   const html = pages[route] ? pages[route]() : infoPage(route);
   main.innerHTML = html || `<section class="not-found"><span class="eyebrow">SAYLESS</span><h1>ON S’EST<br>ÉGARÉS.</h1><p>Cette page n’existe pas. Le premier drop, lui, est juste ici.</p><a class="button" href="#/">Retour à l’accueil</a></section>`;
-  const titles = {accueil:'Say less. Do more.',produit:'Zip Hoodie Pink 001',lookbook:'Le lookbook',histoire:'Notre histoire',paiement:'Récapitulatif · Démonstration',confirmation:'Confirmation · Démonstration',aide:'Questions fréquentes',tailles:'Guide des tailles',livraison:'Livraison',retours:'Retours & rétractation',contact:'Contact',confidentialite:'Confidentialité',cookies:'Cookies','mentions-legales':'Mentions légales',cgv:'Conditions de vente',gestion:'Gestion du stock'};
+  const titles = {accueil:'Say less. Do more.',produit:'Zip Hoodie Pink 001',lookbook:'Le lookbook',histoire:'Notre histoire',paiement:'Livraison et récapitulatif',confirmation:'Confirmation de commande',suivi:'Suivi de commande','commande-annulee':'Retour du paiement',aide:'Questions fréquentes',tailles:'Guide des tailles',livraison:'Livraison',retours:'Retours & rétractation',contact:'Contact',confidentialite:'Confidentialité',cookies:'Cookies','mentions-legales':'Mentions légales',cgv:'Conditions de vente'};
   document.title = `SAYLESS — ${titles[route] || 'Page introuvable'}`;
   $$('.desktop-nav a').forEach(link=>{ if(link.getAttribute('href')==='#/'+route)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current'); });
   document.body.classList.toggle('has-product-bar',route==='produit');
   window.scrollTo({top:0,behavior:'instant'});
   main.focus({preventScroll:true});
   if(route==='produit') setupProductBar();
-  if(document.querySelector('#product-stock,[data-stock-ticker]')) {window.SaylessInventory?.paint();window.SaylessInventory?.refresh();}
-  if(route==='gestion') window.SaylessAdmin?.mount();
+  window.SaylessInventory.enter();
+  if(route==='paiement')window.SaylessCheckoutUI.mount();
+  if(route==='cgv')mountTermsDocument();
+  if(route==='confirmation')window.SaylessCheckoutUI.checkStatus();
+  if(route==='suivi')window.SaylessService.readTracking();
   updateCartCount();
 }
 function setupProductBar() {
@@ -209,9 +214,9 @@ function renderCart() {
     $('#cart-content').innerHTML = `<div class="empty-cart">${bagIcon}<h3>IL ATTEND<br>TON PREMIER CHOIX.</h3><p>Le Pink 001 te fait de l’œil ?</p><a href="#/produit" class="button" data-close-cart-link>Découvrir le hoodie</a></div>`;
     return;
   }
-  $('#cart-content').innerHTML = cart.map(item=>`<div class="cart-item"><img src="/store/assets/hoodie-front.webp" width="88" height="120" alt="Zip Hoodie Pink 001"><div><div class="item-head"><span>Zip Hoodie Pink 001</span><span>${money(PRODUCT.price*item.quantity)}</span></div><p class="item-size">${escapeHTML(item.color||'Rose')} · Taille ${item.size}</p><div class="quantity-row"><div class="quantity-control"><button data-quantity="-1" data-item-key="${escapeHTML((item.color||'Rose')+'|'+item.size)}" aria-label="Diminuer la quantité en taille ${item.size}">−</button><span aria-label="Quantité">${item.quantity}</span><button data-quantity="1" data-item-key="${escapeHTML((item.color||'Rose')+'|'+item.size)}" aria-label="Augmenter la quantité en taille ${item.size}" ${item.quantity>=5?'disabled':''}>+</button></div><button class="remove-item" data-remove="${escapeHTML((item.color||'Rose')+'|'+item.size)}" aria-label="Retirer le hoodie en taille ${item.size}">Retirer</button></div></div></div>`).join('') + `<div class="cart-summary"><div class="summary-row total"><strong>Sous-total TTC</strong><strong>${money(subtotal())}</strong></div><div class="summary-row"><span>Livraison</span><span>Après les coordonnées</span></div><a href="#/paiement" class="button" data-close-cart-link>Continuer vers les coordonnées</a><p class="small-text">Parcours démo · Aucun paiement réel</p><button class="text-link cart-continue" data-close-dialog>Continuer à découvrir</button><p class="cart-note">75 € TTC par gilet, hors livraison. Point relais : 4,90 € (sélecteur à raccorder) ; Colissimo domicile : 8,50 €. Ton panier reste mémorisé 30 jours après sa dernière modification.</p></div>`;
+  $('#cart-content').innerHTML = cart.map(item=>`<div class="cart-item"><img src="/store/assets/hoodie-front.webp" width="88" height="120" alt="Zip Hoodie Pink 001"><div><div class="item-head"><span>Zip Hoodie Pink 001</span><span>${money(PRODUCT.price*item.quantity)}</span></div><p class="item-size">${escapeHTML(item.color||'Rose')} · Taille ${item.size}</p><div class="quantity-row"><div class="quantity-control"><button data-quantity="-1" data-item-key="${escapeHTML((item.color||'Rose')+'|'+item.size)}" aria-label="Diminuer la quantité en taille ${item.size}">−</button><span aria-label="Quantité">${item.quantity}</span><button data-quantity="1" data-item-key="${escapeHTML((item.color||'Rose')+'|'+item.size)}" aria-label="Augmenter la quantité en taille ${item.size}" disabled>+</button></div><button class="remove-item" data-remove="${escapeHTML((item.color||'Rose')+'|'+item.size)}" aria-label="Retirer le hoodie en taille ${item.size}">Retirer</button></div></div></div>`).join('') + `<div class="cart-summary"><p class="small-text" data-purchase-stock role="status"></p><div class="summary-row total"><strong>Sous-total TTC</strong><strong>${money(subtotal())}</strong></div><div class="summary-row"><span>Livraison</span><span>À choisir maintenant</span></div><a href="#/paiement" class="button" data-close-cart-link>Choisir ma livraison</a><p class="small-text">Une pièce maximum · Paiement désactivé dans cet aperçu</p><button class="text-link cart-continue" data-close-dialog>Continuer à découvrir</button><p class="cart-note">75 € TTC par gilet, hors livraison. Point relais : 4,90 € ; Colissimo domicile : 8,50 €. Tarifs sous réserve de validation du transporteur. Ton panier reste mémorisé 30 jours après sa dernière modification.</p></div>`;
 }
-function openCart() { closeMenu(); renderCart(); openDialog($('#cart-dialog')); }
+function openCart() { closeMenu(); renderCart(); openDialog($('#cart-dialog')); window.SaylessInventory.enter(); }
 function addToCart() {
   if(!selectedSize) {
     $('#size-error').textContent = 'Choisis ta taille pour ajouter le hoodie.';
@@ -219,11 +224,11 @@ function addToCart() {
     $('.size-option')?.focus({preventScroll:true});
     return;
   }
-  let item = cart.find(item=>item.size===selectedSize&&item.color===selectedColor);
-  if(!window.SaylessInventory.canAdd(selectedSize,selectedColor,(item?.quantity||0)+1)){toast('Cette quantité n’est pas disponible ou le stock doit être revérifié.');window.SaylessInventory.refresh();return;}
-  if(item && item.quantity>=5) { toast('Limite de démonstration : 5 pièces par taille.'); return; }
-  if(item) item.quantity++; else cart.push({size:selectedSize,color:selectedColor,variantId:window.SaylessInventory.variantId(selectedSize,selectedColor),quantity:1});
-  saveCart(); openCart();
+  if(window.SaylessCheckoutUI.flow.state.attempt){toast('Une tentative est déjà en cours. Reprends-la depuis le récapitulatif.');location.hash='#/paiement';return;}
+  if(cart.length){toast('Une pièce maximum par commande. Retire la sélection actuelle pour choisir une autre taille.');openCart();return;}
+  if(!window.SaylessInventory.canAdd(selectedSize,selectedColor,1)){toast('Cette taille n’est plus disponible ou le stock doit être revérifié.');window.SaylessInventory.refresh();return;}
+  cart=[{size:selectedSize,color:selectedColor,variantId:window.SaylessInventory.variantId(selectedSize,selectedColor),quantity:1}];
+  saveCart();window.SaylessCheckoutUI.cartChanged();openCart();
 }
 function changeGallery(index) {
   if(!GALLERY[index]) return;
@@ -246,14 +251,14 @@ function prepareEmail(form) {
   const message = String(values.get('message')||'').trim();
   const subject = isReturn ? 'SAYLESS — Demande de retour / rétractation' : 'SAYLESS — '+String(values.get('subject')||'Question');
   const body = ['Bonjour SAYLESS,','',message,'',order?'Référence de commande : '+order:'',name?'Nom : '+name:''].filter((line,index,lines)=>line || (index>0 && lines[index-1])).join('\n');
-  const result = $('#form-result');
+  const result = form.querySelector('[data-form-result]');
   result.hidden=false;
   result.innerHTML = `<strong>Ton message est prêt, mais pas encore envoyé.</strong><p class="small-text">Relis-le ci-dessous, puis ouvre ta messagerie. Tu pourras l’envoyer toi-même à SAYLESS.</p><textarea readonly aria-label="Message préparé">${escapeHTML(body)}</textarea><a class="button" href="mailto:SayLe2s@outlook.com?subject=${encodeURIComponent(subject)}&amp;body=${encodeURIComponent(body)}">Ouvrir ma messagerie</a><p class="small-text" style="margin:15px 0 0">Si ta messagerie ne s’ouvre pas, copie le texte et envoie-le à SayLe2s@outlook.com.</p>`;
   result.focus({preventScroll:true});
   result.scrollIntoView({behavior:'smooth',block:'center'});
 }
 
-function prepareWithdrawal(form) {
+function withdrawalMessage(form) {
   const data=new FormData(form);
   const value=key=>String(data.get(key)||'').trim();
   const readableDate=key=>value(key)?value(key).split('-').reverse().join('/'):'Non précisée';
@@ -272,9 +277,13 @@ function prepareWithdrawal(form) {
     'Date de la déclaration : '+new Intl.DateTimeFormat('fr-FR').format(new Date()),
     'Signature : uniquement si ce formulaire est envoyé sur papier.'
   ].join('\n');
-  const result=$('#form-result');
+  return body;
+}
+function prepareWithdrawal(form) {
+  const body=withdrawalMessage(form);
+  const result=form.querySelector('[data-form-result]');
   result.hidden=false;
-  result.innerHTML=`<strong>Déclaration préparée, pas encore envoyée.</strong><p>Relis le texte puis envoie-le depuis ta messagerie. Ce site n’enregistre pas ta demande et n’émet pas d’accusé de réception.</p><textarea readonly aria-label="Déclaration préparée">${escapeHTML(body)}</textarea><a class="button" href="mailto:SayLe2s@outlook.com?subject=${encodeURIComponent('SAYLESS — Rétractation — '+value('order'))}&amp;body=${encodeURIComponent(body)}">Ouvrir ma messagerie</a><p class="small-text">Tu peux aussi copier ce texte et l’envoyer à SayLe2s@outlook.com. Conserve une preuve de ton envoi.</p>`;
+  result.innerHTML=`<strong>Déclaration préparée, pas encore envoyée.</strong><p>Relis le texte puis envoie-le depuis ta messagerie. Ce site n’enregistre pas ta demande et n’émet pas d’accusé de réception.</p><textarea readonly aria-label="Déclaration préparée">${escapeHTML(body)}</textarea><a class="button" href="mailto:SayLe2s@outlook.com?subject=${encodeURIComponent('SAYLESS — Rétractation')}&amp;body=${encodeURIComponent(body)}">Ouvrir ma messagerie</a><p class="small-text">Tu peux aussi copier ce texte et l’envoyer à SayLe2s@outlook.com. Conserve une preuve de ton envoi.</p>`;
   result.focus({preventScroll:true});
   result.scrollIntoView({behavior:'smooth',block:'center'});
 }
@@ -315,65 +324,31 @@ document.addEventListener('click', event=>{
   if(target.hasAttribute('data-zoom-current')) return zoomPhoto(galleryIndex);
   if(target.dataset.zoom!==undefined) return zoomPhoto(Number(target.dataset.zoom));
   if(target.dataset.quantity) {
+    if(window.SaylessCheckoutUI.flow.state.attempt){toast('Reprends d’abord ta tentative en cours.');return;}
     const itemKey=target.dataset.itemKey;const delta=Number(target.dataset.quantity);
+    if(delta>0){toast('Une pièce maximum par commande pour le DROP 01.');return;}
     const current=cart.find(item=>(item.color+'|'+item.size)===itemKey);
     if(delta>0&&current&&!window.SaylessInventory.canAdd(current.size,current.color,current.quantity+delta)){toast('Le stock doit être revérifié ou cette quantité n’est plus disponible.');window.SaylessInventory.refresh();return;}
-    cart=cart.map(item=>(item.color+'|'+item.size)===itemKey?{...item,quantity:Math.max(0,Math.min(5,item.quantity+delta))}:item).filter(item=>item.quantity>0);
+    cart=cart.map(item=>(item.color+'|'+item.size)===itemKey?{...item,quantity:Math.max(0,Math.min(1,item.quantity+delta))}:item).filter(item=>item.quantity>0);
     saveCart();renderCart();
-    refreshCheckout();
+    window.SaylessCheckoutUI.cartChanged();
     const replacement=$$('[data-quantity]').find(el=>el.dataset.itemKey===itemKey&&Number(el.dataset.quantity)===delta);
     if(replacement&&!replacement.disabled)replacement.focus({preventScroll:true});
     else $('#cart-dialog [data-close-dialog]').focus({preventScroll:true});
     return;
   }
   if(target.dataset.remove) {
+    if(window.SaylessCheckoutUI.flow.state.attempt){toast('Reprends d’abord ta tentative en cours.');return;}
     cart=cart.filter(item=>(item.color+'|'+item.size)!==target.dataset.remove);saveCart();renderCart();
-    refreshCheckout();
+    window.SaylessCheckoutUI.cartChanged();
     $('#cart-dialog [data-close-dialog]').focus({preventScroll:true});return;
   }
   if(target.hasAttribute('data-clear-data')) {
-    cart=[]; checkout={step:'details',details:null,shipping:null}; lastDemoOrder=null; saveCart();
-    toast('Ton panier et tes coordonnées d’essai ont été effacés.'); return;
-  }
-  if(target.hasAttribute('data-example-details')) {
-    const example={name:'Client Exemple',email:'exemple@example.com',address:'10 rue Exemple',postcode:'75001',city:'Paris',country:'France'};
-    for(const [key,value] of Object.entries(example)) $('#delivery-'+key).value=value;
-    $('#delivery-name').focus(); return;
-  }
-  if(target.hasAttribute('data-edit-details')) {
-    checkout.step='details'; checkout.shipping=null; refreshCheckout('#checkout-step-title'); return;
-  }
-  if(target.id==='demo-confirm') {
-    if(!cart.length) {location.hash='#/produit';return;}
-    if(!SaylessCommerce.canConfirmDemo(cart,checkout.details,checkout.shipping)) {
-      checkout.step=SaylessCommerce.validDetails(checkout.details)?'shipping':'details';
-      refreshCheckout('#checkout-step-title'); return;
-    }
-    lastDemoOrder={items:cart.map(item=>({...item})),shipping:checkout.shipping,totals:checkoutTotals()};
-    cart=[];checkout={step:'details',details:null,shipping:null};saveCart();location.hash='#/confirmation';return;
+    cart=[];saveCart();window.SaylessCheckoutUI.cartChanged();toast('Le panier local a été effacé. Une éventuelle réservation reste gérée par le serveur.');return;
   }
   if(target.tagName==='A' && target.getAttribute('href')?.startsWith('#/')) {
     closeMenu();closeDialogs(false);
     if(target.getAttribute('href')===location.hash)window.scrollTo({top:0,behavior:'smooth'});
-  }
-});
-document.addEventListener('submit',event=>{
-  const form=event.target;
-  if(form.id==='message-form'){event.preventDefault();prepareEmail(form);}
-  if(form.id==='withdrawal-form'){event.preventDefault();prepareWithdrawal(form);}
-  if(form.id==='delivery-form') {
-    event.preventDefault();
-    const data=new FormData(form);
-    const details=Object.fromEntries(['name','email','address','postcode','city','country'].map(key=>[key,String(data.get(key)||'').trim()]));
-    if(!SaylessCommerce.validDetails(details)) { toast('Vérifie tes coordonnées avant de continuer.'); return; }
-    checkout={step:'shipping',details,shipping:null}; refreshCheckout('#checkout-step-title');
-  }
-});
-document.addEventListener('change',event=>{
-  if(event.target.name==='shipping' && currentRoute()==='paiement') {
-    checkout.shipping=event.target.value==='home' && SaylessCommerce.validDetails(checkout.details)?'home':null;
-    refreshCheckout();
-    $('input[name="shipping"][value="home"]')?.focus({preventScroll:true});
   }
 });
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMenu();});
@@ -384,7 +359,8 @@ $$('dialog').forEach(dialog=>{
 let touchStart=null;
 document.addEventListener('touchstart',event=>{if(event.target.closest('.gallery-main'))touchStart=event.changedTouches[0].clientX;},{passive:true});
 document.addEventListener('touchend',event=>{if(touchStart!==null){const delta=event.changedTouches[0].clientX-touchStart;if(Math.abs(delta)>60)changeGallery((galleryIndex+(delta<0?1:GALLERY.length-1))%GALLERY.length);touchStart=null;}},{passive:true});
-window.addEventListener('storage',event=>{if(event.key===CART_KEY){cart=readCart();updateCartCount();if($('#cart-dialog').open)renderCart();refreshCheckout();}});
+window.addEventListener('storage',event=>{if(event.key===CART_KEY){cart=readCart();updateCartCount();if($('#cart-dialog').open)renderCart();window.SaylessCheckoutUI.cartChanged();}});
 window.addEventListener('hashchange',render);
 window.matchMedia('(min-width: 761px)').addEventListener('change', event=>{if(event.matches)closeMenu();});
+window.SaylessCheckoutUI.captureReturn();
 render();

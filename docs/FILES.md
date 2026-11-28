@@ -1,6 +1,8 @@
 # Fichiers livrés dans v2
 
-90 fichiers versionnés. Les 70 chemins suivis de la source v4 sont conservés ; les ajouts et adaptations figurent dans CHANGELOG.md. Aucun CNAME, workflow de publication, secret, node_modules, état D1 ni build n’est inclus.
+Inventaire historique du dépôt initial du 24 novembre. Pour la préparation, utiliser `git ls-files` et `git diff --name-status c6c9db1...HEAD`.
+
+Le dépôt initial comptait 90 fichiers versionnés. Les 70 chemins suivis de la source v4 sont conservés ; les ajouts et adaptations figurent dans CHANGELOG.md. Aucun CNAME, workflow de publication, secret, node_modules, état D1 ni build n’est inclus.
 
 ## (racine) — 13
 

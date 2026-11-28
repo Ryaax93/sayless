@@ -1,0 +1,142 @@
+✔ PUSH-A1 migration 0009 : base peuplée, 38 envois, 176 échecs, identité et historique intacts ; sauvegarde restaurable (5039.080188ms)
+✔ PUSH-A2 migration 0009 : transaction annulée en entier si une colonne existe déjà (214.834793ms)
+✔ PUSH-A3 panne simultanée Apple/Discord et anciennes alertes : point fixe sans génération récursive (1457.591415ms)
+ℹ Sept jours sans nouvel événement : 40 appels initiaux, puis 0 ; 2 alertes de canal.
+✔ PUSH-A4 zéro abonné et 410 : pas de réessai ; expiration conservée, une notice hors push (493.305067ms)
+✔ PUSH-A5 chiffrement : déchiffrement indépendant OpenSSL/Node et signature JWT ES256 (238.921743ms)
+✔ PUSH-A6 essai manuel : session/origine requises, 6 essais maximum, diagnostic expurgé (791.123121ms)
+✔ PUSH-A7 service worker : chaque message affiche une notification, même si le JSON est invalide (2.063179ms)
+✖ PUSH-R1a : un nouveau contexte serveur conserve le JWT VAPID pendant au moins une heure (30.015445ms)
+ℹ Deux contextes à 60 s d'écart : 2 JWT distincts ; attendu 1.
+✖ PUSH-R1b : plusieurs premiers envois simultanés partagent le même JWT (4.739153ms)
+ℹ Premiers appels concurrents : 8 JWT distincts ; attendu 1.
+✖ PUSH-R2 : une clôture Face ID pendant un envoi empêche toute nouvelle tentative (4294.424603ms)
+ℹ Après clôture et réponse réseau tardive : status=pending, closed_at présent=true, nouvel envoi=1.
+✖ PUSH-R3 : Activer remplace aussi un abonnement expiré qui utilise encore la bonne clé (605.47743ms)
+ℹ Activer : unsubscribe=0, subscribe=0, ancien endpoint réactivé=1, prochain essai=410.
+✖ PUSH-R4 : un salon Discord sain ne clôt pas la panne persistante d’un autre salon (867.932599ms)
+ℹ Webhook commandes toujours 404 : 4 alertes en 4 min, diagnostic global=ok.
+✖ PUSH-R5 : le diagnostic Santé reflète un refus Apple observé pendant l’essai manuel (720.895474ms)
+ℹ Essai manuel refusé 403 BadJwtToken ; Santé=ok, « 1 appareil(s) abonné(s), aucun envoi encore accepté ».
+ℹ tests 13
+ℹ suites 0
+ℹ pass 7
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8856.498235
+
+✖ failing tests:
+
+test at tests/review/push-open-issues.test.mjs:16:1
+✖ PUSH-R1a : un nouveau contexte serveur conserve le JWT VAPID pendant au moins une heure (30.015445ms)
+  AssertionError [ERR_ASSERTION]: Le cache doit survivre à un démarrage à froid ; ne jamais imprimer le JWT.
+
+  false !== true
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-open-issues.test.mjs:23:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-open-issues.test.mjs:26:1
+✖ PUSH-R1b : plusieurs premiers envois simultanés partagent le même JWT (4.739153ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  8 !== 1
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-open-issues.test.mjs:30:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 8,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-open-issues.test.mjs:33:1
+✖ PUSH-R2 : une clôture Face ID pendant un envoi empêche toute nouvelle tentative (4294.424603ms)
+  AssertionError [ERR_ASSERTION]: Une réponse tardive ne doit pas remettre une ligne clôturée en pending.
+
+  1 !== 0
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-open-issues.test.mjs:60:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-open-issues.test.mjs:63:1
+✖ PUSH-R3 : Activer remplace aussi un abonnement expiré qui utilise encore la bonne clé (605.47743ms)
+  AssertionError [ERR_ASSERTION]: Ne pas réactiver uniquement en base un endpoint déjà refusé par Apple.
+  + actual - expected
+
+    [
+  +   0,
+  +   0
+  -   1,
+  -   1
+    ]
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-open-issues.test.mjs:93:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 0, 0 ],
+    expected: [ 1, 1 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-open-issues.test.mjs:96:1
+✖ PUSH-R4 : un salon Discord sain ne clôt pas la panne persistante d’un autre salon (867.932599ms)
+  AssertionError [ERR_ASSERTION]: Une panne du même webhook doit rester un incident, malgré les autres salons sains.
+
+  4 !== 1
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-open-issues.test.mjs:113:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 4,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/review/push-open-issues.test.mjs:116:1
+✖ PUSH-R5 : le diagnostic Santé reflète un refus Apple observé pendant l’essai manuel (720.895474ms)
+  AssertionError [ERR_ASSERTION]: La santé du canal doit tenir compte du dernier échec diagnostiqué.
+
+  'ok' !== 'alert'
+
+      at TestContext.<anonymous> (file://<copie-locale>/tests/review/push-open-issues.test.mjs:126:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'ok',
+    expected: 'alert',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

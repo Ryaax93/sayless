@@ -1,0 +1,35 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> sayless-v2@0.2.0 test:review:push
+> node --test tests/review/push-integrity.test.mjs tests/review/push-deployment.test.mjs tests/review/push-open-issues.test.mjs
+
+✔ PUSH-D1 assistant : installation existante, 10 salons et connecteurs, aucune rotation des secrets ni changement de liaison (851.766147ms)
+✔ PUSH-D2 vrai Wrangler --local : 0001–0008 puis 0009, registre des migrations et seconde exécution sans effet (22490.371636ms)
+✔ PUSH-A1 migration 0009 : base peuplée, 38 envois, 176 échecs, identité et historique intacts ; sauvegarde restaurable (2160.105267ms)
+✔ PUSH-A2 migration 0009 : transaction annulée en entier si une colonne existe déjà (259.523713ms)
+✔ PUSH-A3 panne simultanée Apple/Discord et anciennes alertes : point fixe sans génération récursive (2065.218832ms)
+ℹ Sept jours sans nouvel événement : 40 appels initiaux, puis 0 ; 2 alertes de canal.
+✔ PUSH-A4 zéro abonné et 410 : pas de réessai ; expiration conservée, une notice hors push (658.614535ms)
+✔ PUSH-A5 chiffrement : déchiffrement indépendant OpenSSL/Node et signature JWT ES256 (348.543479ms)
+✔ PUSH-A6 essai manuel : session/origine requises, 6 essais maximum, diagnostic expurgé (1200.504753ms)
+✔ PUSH-A7 service worker : chaque message affiche une notification, même si le JSON est invalide (2.097391ms)
+✔ PUSH-R1a : un nouveau contexte serveur conserve le JWT VAPID pendant au moins une heure (831.613509ms)
+ℹ Deux contextes à 60 s d'écart : 1 JWT distincts ; attendu 1.
+✔ PUSH-R1b : plusieurs premiers envois simultanés partagent le même JWT (28.172103ms)
+ℹ Premiers appels concurrents : 1 JWT distincts ; attendu 1.
+✔ PUSH-R2 : une clôture Face ID pendant un envoi empêche toute nouvelle tentative (885.948205ms)
+ℹ Après clôture et réponse réseau tardive : status=dead, closed_at présent=true, nouvel envoi=0.
+✔ PUSH-R3 : Activer remplace aussi un abonnement expiré qui utilise encore la bonne clé (659.232836ms)
+ℹ Activer : unsubscribe=1, subscribe=1, ancien endpoint réactivé=0, prochain essai=undefined.
+✔ PUSH-R4 : un salon Discord sain ne clôt pas la panne persistante d’un autre salon (1098.439775ms)
+ℹ Webhook commandes toujours 404 : 1 alertes en 4 min, diagnostic global=failing.
+✔ PUSH-R5 : le diagnostic Santé reflète un refus Apple observé pendant l’essai manuel (855.410253ms)
+ℹ Essai manuel refusé 403 BadJwtToken ; Santé=alert, « Dernier envoi refusé (Appareil de recette, le 15/01 à 09 h 00) : Apple refuse le jeton VAPID (signature, sujet https: ou mailto:, audience ou expiration) (403 BadJwtToken) ».
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 23468.648587
