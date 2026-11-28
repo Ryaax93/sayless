@@ -10,13 +10,17 @@ export const FREE_PLAN = Object.freeze({ queries: 50, external: 50 });
 // Coût maximal d'une unité de travail : pire cas mesuré plus une marge (tests R17, R18 et U11).
 // Vente rattrapée par le balayage : 24 requêtes ; e-mail en échec avec alerte : 7 ; message en échec
 // définitif avec alerte : 5 ; vente 1.0 qui épuise le drop (alertes de stock) : 17. Un message push
-// coûte en plus une requête et un appel par appareil abonné.
+// coûte en plus 5 requêtes (abonnements, jeton VAPID lu puis renouvelé, résultats, réponses
+// tardives), puis une requête (tentative réservée) et un appel par appareil abonné (test N25).
+// Retrait d'un ancien webhook Discord avant les envois : 2 requêtes au plus par invocation.
 export const COST = Object.freeze({
   sweepOrder: { queries: 30, external: 3 },
   mailIntent: { queries: 8 },
   outboxMessage: { queries: 6, external: 1 },
   legacySale: { queries: 20, external: 1 },
+  pushMessage: { queries: 5 },
   pushDevice: { queries: 1, external: 1 },
+  discordReconcile: { queries: 2 },
   dailyReport: { queries: 10 },
   relayReminder: { queries: 2 },
   retention: { queries: 4 },

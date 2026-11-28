@@ -69,6 +69,9 @@ jobs:
       - name: Contre-audit push de Work (intégrité, mise à jour, six critères R1 à R5)
         if: ${{ !cancelled() }}
         run: npm run test:review:push
+      - name: Second contre-audit push de Work (migrations, Wrangler local, réception, P2-R1 à P2-R4)
+        if: ${{ !cancelled() }}
+        run: npm run test:review:push2
       - name: Transport D1 strict (130 réponses de webhook, aucune erreur locale)
         if: ${{ !cancelled() }}
         run: npm run test:review:d1

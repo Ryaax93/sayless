@@ -9,7 +9,7 @@ import { stripeMode, stripeReady } from './stripe.mjs';
 import { currentTerms, publishTerms, termsDocument } from './terms.mjs';
 import { exportRecettes, csvSafe, inspectReturn, viewContact } from './operations.mjs';
 import { legacyReviewText, recordLegacyLinkSale } from './payments.mjs';
-import { channelRecovered, configuredChannels, deliverOutbox, discordRouting, emailLabel, parisClock, reconcileEmail } from './notify.mjs';
+import { channelRecovered, configuredChannels, deliverOutbox, discordRouting, emailLabel, parisClock, reconcileDiscordDestinations, reconcileEmail } from './notify.mjs';
 import { emailReady } from './email.mjs';
 import { intentStatement, pendingIntents, processMailIntents } from './intents.mjs';
 import { explainCode, fingerprint, pushReady, sendToDevices, validSubscription, vapidSelfCheck } from './push.mjs';
@@ -245,7 +245,7 @@ function failingText(health) {
 async function channelStates(db) {
   const rows = await all(db, 'SELECT channel, state, since, failures, last_error, alerted_at, last_ok_at FROM channel_health');
   const failing = await all(db, `SELECT channel, destination, label, since, failures, last_error FROM delivery_health
-    WHERE state = 'failing' ORDER BY since`);
+    WHERE state = 'failing' AND retired_at IS NULL ORDER BY since`);
   return Object.fromEntries(rows.map((r) => [r.channel, { ...r, destinations: failing.filter((d) => d.channel === r.channel) }]));
 }
 // Appareils abonnés, sans adresse ni clé : nom, empreinte, dates, dernier résultat expliqué.
@@ -479,21 +479,29 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       // envoi (VapidPkHashMismatch). STUDIO le remplace alors par un abonnement à la clé actuelle.
       if (typeof body.key === 'string' && body.key.replace(/=+$/, '') !== String(ctx.VAPID_PUBLIC_KEY).replace(/=+$/, '')) throw fail('push_key_mismatch');
       const labelText = typeof body.label === 'string' ? body.label.slice(0, 40) : 'iPhone';
-      // Un abonnement déjà déclaré expiré (ou à une autre clé) par le service n'est jamais réactivé
-      // tel quel : sa ligne et son état restent dans l'historique, STUDIO doit en créer un nouveau.
-      const known = await one(ctx.db, 'SELECT expired_at, last_error FROM push_subscriptions WHERE endpoint = ?', sub.endpoint);
-      if (known?.expired_at) {
-        await batch(ctx.db, [audit(ctx.db, now, 'fondateur', 'push_subscribe_refused', labelText, known.last_error ?? 'expire')]);
-        return json({ subscribed: false, reason: 'push_subscription_expired', code: known.last_error ?? null });
-      }
       const replaces = typeof body.replaces === 'string' && body.replaces !== sub.endpoint && body.replaces.length <= 1024 ? body.replaces : null;
-      await batch(ctx.db, [sql(ctx.db, `INSERT INTO push_subscriptions (endpoint, p256dh, auth, label, created_at) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, failures = 0`,
-      sub.endpoint, sub.p256dh, sub.auth, labelText, now),
+      // Admission conditionnelle, atomique : un abonnement déjà déclaré expiré (ou à une autre clé) par
+      // le service n'est jamais réactivé, même si l'expiration arrive pendant cette inscription. La
+      // base décide au moment de l'écriture ; l'ancien abonnement remplacé, le journal et la réponse
+      // suivent la ligne effective, dans le même lot (aucune lecture préalable).
+      const admitted = `EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ? AND expired_at IS NULL AND admitted_at = ?)`;
+      const written = await batch(ctx.db, [sql(ctx.db, `INSERT INTO push_subscriptions (endpoint, p256dh, auth, label, created_at, admitted_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, label = excluded.label, failures = 0, admitted_at = excluded.admitted_at
+        WHERE push_subscriptions.expired_at IS NULL
+        RETURNING endpoint`, sub.endpoint, sub.p256dh, sub.auth, labelText, now, now),
       // Ancien abonnement remplacé sur cet appareil : gardé (historique), plus utilisé.
       ...(replaces ? [sql(ctx.db, `UPDATE push_subscriptions SET expired_at = COALESCE(expired_at, ?), last_error = COALESCE(last_error, 'remplace')
-        WHERE endpoint = ?`, now, replaces)] : []),
-      audit(ctx.db, now, 'fondateur', 'push_subscribed', labelText, replaces ? 'remplace' : 'ok')]);
+        WHERE endpoint = ? AND ${admitted}`, now, replaces, sub.endpoint, now)] : []),
+      sql(ctx.db, `INSERT INTO audit_log (at, actor, action, target, result) SELECT ?, 'fondateur', 'push_subscribed', ?, ? WHERE ${admitted}`,
+        now, labelText, replaces ? 'remplace' : 'ok', sub.endpoint, now),
+      sql(ctx.db, `INSERT INTO audit_log (at, actor, action, target, result)
+        SELECT ?, 'fondateur', 'push_subscribe_refused', ?, COALESCE((SELECT last_error FROM push_subscriptions WHERE endpoint = ?), 'expire') WHERE NOT ${admitted}`,
+      now, labelText, sub.endpoint, sub.endpoint, now),
+      sql(ctx.db, 'SELECT expired_at, last_error FROM push_subscriptions WHERE endpoint = ?', sub.endpoint)]);
+      const row = written.at(-1).results?.[0];
+      if (written[0].results?.length !== 1 || !row || row.expired_at !== null) {
+        return json({ subscribed: false, reason: 'push_subscription_expired', code: row?.last_error ?? null });
+      }
       return json({ subscribed: true, fp: await fingerprint(sub.endpoint) });
     }
     case 'POST /api/admin/push/unsubscribe': {
@@ -513,21 +521,24 @@ export async function handleStudio(request, ctx, { route, url, session, settings
       const self = await vapidSelfCheck(ctx);
       const transport = deps.transport ?? fetch;
       // Un identifiant par appareil essayé : l'iPhone le renvoie à la réception (« reçu »), ce qui
-      // distingue l'acceptation par Apple de l'arrivée réelle de la notification.
+      // distingue l'acceptation par Apple de l'arrivée réelle de la notification. Il est inscrit avec
+      // la tentative de l'appareil, juste avant l'appel au service (sendToDevices).
       const targets = self.keypair ? await all(ctx.db, `SELECT endpoint FROM push_subscriptions WHERE expired_at IS NULL
         ${endpoint ? 'AND endpoint = ?' : ''} ORDER BY created_at LIMIT 10`, ...(endpoint ? [endpoint] : [])) : [];
       const results = [];
       for (const target of targets) {
         const test = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('');
-        await batch(ctx.db, [sql(ctx.db, 'UPDATE push_subscriptions SET test_id = ?, test_sent_at = ?, received_at = NULL WHERE endpoint = ?', test, now, target.endpoint)]);
         results.push(...await sendToDevices(ctx, (...a) => transport(...a), { kind: 'push_test', level: 'info', test,
           title: 'Essai SAYLESS STUDIO', body: 'Si tu lis ceci, les notifications de cet iPhone fonctionnent.' }, now, { endpoint: target.endpoint }));
       }
+      // Réponse arrivée après un essai plus récent (autre client STUDIO, envoi automatique) : montrée à
+      // ce client, mais seul le dernier essai fait l'état de l'appareil et du canal.
       const devices = await Promise.all(results.map(async (r) => ({ label: r.label ?? 'Appareil', fp: await fingerprint(r.endpoint), service: r.service,
-        status: r.status || null, reason: r.reason, result: r.result,
-        explanation: r.result === 'ok' ? 'Accepté par le service de notification : la notification doit apparaître dans quelques secondes.' : explainCode(r.code) })));
+        status: r.status || null, reason: r.reason, result: r.result, current: r.applied,
+        explanation: `${r.result === 'ok' ? 'Accepté par le service de notification : la notification doit apparaître dans quelques secondes.' : explainCode(r.code)}${
+          r.applied || r.local ? '' : ' Un essai plus récent a eu lieu entre-temps : c’est lui qui compte dans Santé du site.'}` })));
       const summary = results.map((r) => r.code ?? 'ok').join(',').slice(0, 120) || (self.keypair ? 'aucun_appareil' : 'vapid_cle_invalide');
-      await batch(ctx.db, [...(results.some((r) => r.result === 'ok') ? channelRecovered(ctx.db, 'push', now) : []),
+      await batch(ctx.db, [...(results.some((r) => r.result === 'ok' && r.applied) ? channelRecovered(ctx.db, 'push', now) : []),
         audit(ctx.db, now, 'fondateur', 'push_test', `${results.length} appareil(s)`, summary)]);
       return json({ keys: { subject: self.subject, keypair: self.keypair, key_fp: self.key_fp }, devices,
         this_device: endpoint ? (results.length ? 'known' : 'unknown') : null });
@@ -544,6 +555,8 @@ export async function handleStudio(request, ctx, { route, url, session, settings
 
     // ---- santé et historique ----
     case 'GET /api/admin/health': {
+      // Webhook Discord remplacé depuis le dernier envoi : ancienne destination retirée avant l'affichage.
+      await reconcileDiscordDestinations(ctx, now);
       const ready = await readiness(ctx, deps);
       const lastEvent = (await one(ctx.db, 'SELECT MAX(at) AS t FROM processed_events')).t;
       const dead = (await one(ctx.db, `SELECT COUNT(*) AS n FROM outbox WHERE status = 'dead' AND closed_at IS NULL`)).n;

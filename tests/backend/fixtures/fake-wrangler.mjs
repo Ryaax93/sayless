@@ -57,6 +57,7 @@ if (a === 'whoami') {
       : /FROM push_subscriptions/.test(command) ? [{ n: 1, echecs: 30, premier: 1795001800, dernier: 1795001800, succes: null }]
         : /FROM notifications/.test(command) ? [{ kind: 'technical', n: 28, premier: 1795001860 }]
           : migrated && /FROM sqlite_master/.test(command) ? [{ name: 'channel_health' }, { name: 'delivery_health' }]
+            : migrated && /FROM d1_migrations/.test(command) ? [{ name: '0011_jeton_vapid_tentatives.sql' }]
             : migrated && /FROM channel_health/.test(command) ? [{ channel: 'discord', state: 'failing', failures: 2, last_error: 'discord_404', since: 1795080000, last_ok_at: 1795089000 },
               { channel: 'push', state: 'ok', failures: 0, last_error: null, since: 1795090000, last_ok_at: 1795090000 }]
               : migrated && /FROM delivery_health/.test(command) ? [{ channel: 'discord', label: 'salon commandes', failures: 2, last_error: 'discord_404', since: 1795080000 }] : [];

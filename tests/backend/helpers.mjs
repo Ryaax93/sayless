@@ -7,6 +7,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { setVapidStore } from '../../backend/src/vapid-store.mjs';
 import { availableParallelism, release, type } from 'node:os';
 import { handleOps, handlePublicApi, createContext } from '../../backend/src/routes.mjs';
 import { StripeError } from '../../backend/src/stripe.mjs';
@@ -14,7 +15,8 @@ import { recordInventory } from '../../backend/src/stock.mjs';
 import { publishTerms } from '../../backend/src/terms.mjs';
 
 const MIGRATIONS = ['0001_commerce.sql', '0002_catalog_drop01.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql',
-  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql', '0009_notifications_fiables.sql', '0010_destinations_reception.sql'];
+  '0005_revue_work.sql', '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql', '0009_notifications_fiables.sql', '0010_destinations_reception.sql',
+  '0011_jeton_vapid_tentatives.sql'];
 // Texte de CGV de TEST uniquement (jamais publié) : sert à vérifier la version signée dans le devis.
 export const TEST_TERMS = { version: '2026-11', body: `CGV DE TEST — document fictif utilisé par les essais automatiques. ${'Clause de test. '.repeat(20)}` };
 export const TEST_LINK = { id: 'plink_test', price: 'price_test_lien' };
@@ -46,8 +48,27 @@ export async function startDatabases() {
   // Miniflare 5 (celui de wrangler 4.168) : connexions locales réutilisées (keep-alive). Miniflare 4
   // ouvrait une connexion par requête SQL, ce qui épuisait les ports de Windows (EADDRINUSE).
   mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("ok")}}',
-    d1Databases: Object.fromEntries(Array.from({ length: SLOTS }, (_, i) => [`DB${i}`, `test-db-${i}`])),
+    d1Databases: { ...Object.fromEntries(Array.from({ length: SLOTS }, (_, i) => [`DB${i}`, `test-db-${i}`])), VAPID: 'test-vapid' },
     kvNamespaces: ['BACKUPS'], compatibilityDate: '2026-05-15' }));
+  // Appels directs au jeton VAPID sans `env.DB` (tests du contre-audit) : une vraie base D1 locale,
+  // partagée par tous les contextes du fichier comme la liaison DB l'est par les instances du Worker.
+  // Migrée au premier usage seulement.
+  setVapidStore(lazyDatabase(() => mf.getD1Database('VAPID')));
+}
+// Base migrée à la première requête (préparation, lecture ou lot), sinon jamais ouverte.
+function lazyDatabase(open) {
+  let ready = null;
+  const db = () => (ready ??= (async () => {
+    const real = await open();
+    await migrate(real, WITHOUT_CATALOG);
+    return downable(real);
+  })());
+  const statement = (text, args = []) => ({ text, args, bind: (...a) => statement(text, a),
+    first: async (...x) => (await db()).prepare(text).bind(...args).first(...x),
+    all: async () => (await db()).prepare(text).bind(...args).all(),
+    run: async () => (await db()).prepare(text).bind(...args).run() });
+  return { prepare: (text) => statement(text),
+    batch: async (stmts) => { const real = await db(); return real.batch(stmts.map((s) => real.prepare(s.text).bind(...s.args))); } };
 }
 // Échecs de connexion au moteur D1 local (ports épuisés, connexion coupée) : environnement, pas
 // résultat métier. Jamais réessayés ni masqués : l'erreur remonte au code testé, elle est comptée,
@@ -82,6 +103,7 @@ export const engineFailure = (error, sqlText = null) => {
 };
 export const engineFailureSummary = () => [...engineFailures].map(([code, n]) => `${code} ×${n}`).join(', ');
 export async function stopDatabases() {
+  setVapidStore(null);
   await mf?.dispose();
   if (blockedNetwork.length) console.error(`\n[banc] Appels réseau externes bloqués : ${[...new Set(blockedNetwork)].join(', ')} (×${blockedNetwork.length}).`);
   if (engineFailures.size) {
@@ -130,14 +152,16 @@ export async function emptyDatabase() {
 
 // Base « débranchable » : simule une panne D1, ou une réponse perdue après validation d'un lot
 // (loseResponseWhen reçoit les requêtes SQL du lot ; une seule fois). beforeBatch(textes) : action
-// concurrente exécutée juste avant un lot (une seule fois si elle renvoie true).
+// concurrente exécutée juste avant un lot (une seule fois si elle renvoie true). failWhen(texte) :
+// panne ciblée, les requêtes (ou lots) dont un texte SQL la satisfait échouent comme si D1 était
+// injoignable.
 // `state.queries` : requêtes envoyées à D1, comptées comme Cloudflare (un lot = une requête), pour
 // vérifier la limite de 50 requêtes par invocation de l'offre gratuite.
 export function downable(real) {
-  const state = { down: false, loseResponseWhen: null, beforeBatch: null, queries: 0 };
+  const state = { down: false, loseResponseWhen: null, beforeBatch: null, failWhen: null, queries: 0 };
   const fail = () => Promise.reject(new Error('D1 indisponible (simulé)'));
   const watch = (promise, sqlText = null) => promise.catch((error) => { engineFailure(error, sqlText); throw error; });
-  const query = (run, sqlText) => { state.queries += 1; return state.down ? fail() : watch(run(), sqlText); };
+  const query = (run, sqlText) => { state.queries += 1; return state.down || state.failWhen?.(sqlText ?? '') ? fail() : watch(run(), sqlText); };
   const wrap = (stmt, text) => ({
     inner: stmt,
     text,
@@ -151,7 +175,7 @@ export function downable(real) {
     prepare: (text) => wrap(real.prepare(text), text),
     batch: async (stmts) => {
       state.queries += 1;
-      if (state.down) throw new Error('D1 indisponible (simulé)');
+      if (state.down || stmts.some((st) => state.failWhen?.(st.text ?? ''))) throw new Error('D1 indisponible (simulé)');
       if (state.beforeBatch && (await state.beforeBatch(stmts.map((s) => s.text ?? '')))) state.beforeBatch = null;
       const result = await watch(real.batch(stmts.map((s) => s.inner ?? s)), stmts.map((s) => s.text ?? '').find(Boolean) ?? 'lot');
       if (state.loseResponseWhen?.(stmts.map((s) => s.text ?? ''))) {

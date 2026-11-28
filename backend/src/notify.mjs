@@ -1,7 +1,7 @@
 // Notifications : centre STUDIO, file d'envoi Discord / push, alertes de stock, rapport quotidien.
 // Les messages ne contiennent jamais de nom, d'e-mail, de téléphone ni d'adresse : seuls des
 // champs de la liste blanche (numéro, référence, taille, montant, mode de livraison) sont lus.
-import { all, batch, getSettings, one, pad4, sql } from './lib.mjs';
+import { all, audit, batch, getSettings, one, pad4, sql } from './lib.mjs';
 import { explainCode, fingerprint, pushReady } from './push.mjs';
 import { COST, fits } from './budget.mjs';
 import { emailEnvelope } from './email.mjs';
@@ -52,6 +52,50 @@ export async function discordDestination(env, route) {
 // Salons et destination effective, sans aucune adresse (écran Santé de STUDIO).
 export const discordRouting = (env) => Object.keys(DISCORD_ROUTES).map((route) => ({ route,
   target: validWebhook(env[discordSecretName(route)]) ? 'dedicated' : validWebhook(env.DISCORD_WEBHOOK_URL) ? 'shared' : 'none' }));
+
+// Destinations Discord actuellement configurées : le webhook effectif de chaque salon, plus le webhook
+// unique de secours s'il est saisi (il peut encore servir). « wnone » (aucun webhook) n'est active
+// que tant qu'un salon n'a réellement aucune destination. Jamais d'adresse : empreintes seulement.
+export async function activeDiscordDestinations(env) {
+  const active = new Map();
+  for (const route of Object.keys(DISCORD_ROUTES)) {
+    const dest = await discordDestination(env, route);
+    if (!active.has(dest.id)) active.set(dest.id, dest.label);
+  }
+  if (validWebhook(env.DISCORD_WEBHOOK_URL)) {
+    const id = `w${await fingerprint(env.DISCORD_WEBHOOK_URL)}`;
+    if (!active.has(id)) active.set(id, 'webhook unique');
+  }
+  return active;
+}
+// Webhook remplacé ou retiré de la configuration : son ancienne destination est retirée (ligne et
+// historique gardés, incident résolu, entrée au journal) et ne compte plus dans l'état du canal ; elle
+// redevient active si son webhook est de nouveau configuré. Une destination encore servie par un autre
+// salon ou par le webhook de secours n'est jamais retirée. Renvoie le nombre de changements.
+export async function reconcileDiscordDestinations(env, now) {
+  const { db } = env;
+  const rows = await all(db, `SELECT destination, label, state, retired_at FROM delivery_health WHERE channel = 'discord'`);
+  if (!rows.length) return 0;
+  const active = await activeDiscordDestinations(env);
+  const retire = rows.filter((r) => r.retired_at === null && !active.has(r.destination));
+  const restore = rows.filter((r) => r.retired_at !== null && active.has(r.destination));
+  if (!retire.length && !restore.length) return 0;
+  await batch(db, [
+    ...retire.flatMap((r) => [
+      sql(db, `UPDATE delivery_health SET retired_at = ? WHERE channel = 'discord' AND destination = ? AND retired_at IS NULL`, now, r.destination),
+      sql(db, `UPDATE notifications SET resolved_at = ? WHERE kind = 'channel_failure' AND resolved_at IS NULL AND ref >= ? AND ref < ?`,
+        now, `discord:${r.destination}:`, `discord:${r.destination};`),
+      audit(db, now, 'system', 'discord_destination_retiree', r.label ?? 'webhook', r.state === 'failing' ? 'en_echec_retiree' : 'retiree')]),
+    ...restore.flatMap((r) => [
+      // Dernier état connu gardé ; son ancienne alerte a été résolue au retrait : nouvelle période,
+      // une panne toujours présente sera de nouveau signalée (nouvelle alerte, pas l'ancienne).
+      sql(db, `UPDATE delivery_health SET retired_at = NULL, alerted_at = NULL, since = ?, failures = 0
+        WHERE channel = 'discord' AND destination = ? AND retired_at IS NOT NULL`, now, r.destination),
+      audit(db, now, 'system', 'discord_destination_reprise', active.get(r.destination) ?? r.label ?? 'webhook', r.state)]),
+    channelAggregate(db, 'discord'),
+  ]);
+  return retire.length + restore.length;
+}
 
 // `exclude` : canaux à ne pas utiliser (une alerte sur une panne de canal ne repart jamais par ce canal).
 // iPhone : un message n'est mis en file que si un appareil est abonné ; sans appareil, la notification
@@ -201,14 +245,17 @@ const resolveAlerts = (db, channel, dest, now, guard = null) => {
     AND ((ref >= ? AND ref < ?) OR (? = 'discord' AND ref >= 'discord:0' AND ref < 'discord::')) ${guard ? `AND ${SAME_ATTEMPT('sent')}` : ''}`,
   now, from, to, channel, ...(guard ? [guard.id, guard.attempts] : []));
 };
+// État du canal = agrégat de ses destinations ACTIVES (une destination Discord retirée garde son
+// historique mais ne compte plus). Toujours une ligne, même si aucune destination n'est active.
 const channelAggregate = (db, channel) => sql(db, `INSERT INTO channel_health (channel, state, since, failures, last_error, alerted_at, last_ok_at)
-  SELECT channel, CASE WHEN SUM(state = 'failing') > 0 THEN 'failing' ELSE 'ok' END,
-    COALESCE(MIN(CASE WHEN state = 'failing' THEN since END), MIN(since)), COALESCE(SUM(CASE WHEN state = 'failing' THEN failures END), 0),
-    (SELECT d.last_error FROM delivery_health d WHERE d.channel = ? AND d.state = 'failing' ORDER BY d.since DESC LIMIT 1),
-    MAX(alerted_at), MAX(last_ok_at)
-  FROM delivery_health WHERE channel = ? GROUP BY channel
+  SELECT ?, CASE WHEN SUM(state = 'failing') > 0 THEN 'failing' ELSE 'ok' END,
+    COALESCE(MIN(CASE WHEN state = 'failing' THEN since END), MIN(since), (SELECT h.since FROM channel_health h WHERE h.channel = ?), 0),
+    COALESCE(SUM(CASE WHEN state = 'failing' THEN failures END), 0),
+    (SELECT d.last_error FROM delivery_health d WHERE d.channel = ? AND d.state = 'failing' AND d.retired_at IS NULL ORDER BY d.since DESC LIMIT 1),
+    MAX(alerted_at), COALESCE(MAX(last_ok_at), (SELECT h.last_ok_at FROM channel_health h WHERE h.channel = ?))
+  FROM delivery_health WHERE channel = ? AND retired_at IS NULL
   ON CONFLICT (channel) DO UPDATE SET state = excluded.state, since = excluded.since, failures = excluded.failures,
-    last_error = excluded.last_error, alerted_at = excluded.alerted_at, last_ok_at = excluded.last_ok_at`, channel, channel);
+    last_error = excluded.last_error, alerted_at = excluded.alerted_at, last_ok_at = excluded.last_ok_at`, channel, channel, channel, channel, channel);
 // Envoi réussi hors file (essai depuis STUDIO) : destination rétablie, alerte résolue.
 export const channelRecovered = (db, channel, now, dest = { id: channel === 'push' ? 'iphone' : 'resend', label: channel === 'push' ? 'iPhone' : 'Resend' }) => [
   destinationOk(db, channel, dest, now), resolveAlerts(db, channel, dest, now), channelAggregate(db, channel)];
@@ -226,7 +273,7 @@ async function alertChannel(env, deps, channel, dest, health, code, now) {
   const { db } = env;
   if (!health || (health.alerted_at !== null && health.alerted_at > now - ALERT_REPEAT)) return;
   const claimed = await batch(db, [sql(db, `UPDATE delivery_health SET alerted_at = ? WHERE channel = ? AND destination = ? AND state = 'failing'
-    AND (alerted_at IS NULL OR alerted_at <= ?)`, now, channel, dest.id, now - ALERT_REPEAT), channelAggregate(db, channel)]);
+    AND retired_at IS NULL AND (alerted_at IS NULL OR alerted_at <= ?)`, now, channel, dest.id, now - ALERT_REPEAT), channelAggregate(db, channel)]);
   if (!claimed[0].meta.changes) return;
   const again = health.alerted_at !== null;
   // Jamais par la destination en panne : pour Discord, l'alerte part par le salon « alertes » seulement
@@ -274,6 +321,9 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
   ...(only ? [now, only, limit] : [now, limit]));
   let sent = 0;
   let devices = null; // appareils abonnés, lus une fois si un message push attend (coût par appareil)
+  // Webhook Discord remplacé : l'ancienne destination est retirée avant les envois (une lecture, un
+  // lot s'il y a un changement), pour que l'état du canal ne dépende que des destinations actuelles.
+  if (rows.some((r) => r.channel === 'discord') && fits(deps, COST.discordReconcile)) await reconcileDiscordDestinations(env, now);
   for (const row of rows) {
     if (deps.budget) {
       const push = row.channel === 'push';
@@ -281,8 +331,8 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
         if (!fits(deps, { queries: 1 })) break;
         devices = (await one(db, 'SELECT COUNT(*) AS n FROM push_subscriptions WHERE expired_at IS NULL'))?.n ?? 0;
       }
-      // Push : lecture des abonnements, puis une requête et un appel par appareil.
-      if (!fits(deps, push ? { queries: COST.outboxMessage.queries + 1 + devices * COST.pushDevice.queries, external: devices * COST.pushDevice.external }
+      // Push : abonnements, jeton VAPID, résultats, puis une tentative et un appel par appareil.
+      if (!fits(deps, push ? { queries: COST.outboxMessage.queries + COST.pushMessage.queries + devices * COST.pushDevice.queries, external: devices * COST.pushDevice.external }
         : COST.outboxMessage)) break; // la suite à la minute suivante
     }
     const email = row.channel === 'email';
@@ -311,8 +361,11 @@ export async function deliverOutbox(env, senders, deps, { maxAttempts = 5, limit
         { ...row, attempts, envelope: email ? JSON.parse(envelope) : null });
       const ref = typeof receipt?.id === 'string' ? receipt.id : null;
       const guard = { id: row.id, attempts };
+      // Push remis mais dépassé sur l'appareil par une tentative plus récente (essai depuis STUDIO) :
+      // message noté remis, sans déclarer le canal rétabli à la place du dernier résultat.
+      const recovers = !(row.channel === 'push' && receipt?.current === 0);
       const done = await batch(db, [sql(db, `UPDATE outbox SET status = 'sent', provider_ref = ?, last_error = NULL ${mine}`, ref, row.id, attempts),
-        destinationOk(db, row.channel, dest, now, guard), resolveAlerts(db, row.channel, dest, now, guard), channelAggregate(db, row.channel)]);
+        ...(recovers ? [destinationOk(db, row.channel, dest, now, guard), resolveAlerts(db, row.channel, dest, now, guard), channelAggregate(db, row.channel)] : [])]);
       if (done[0].meta.changes) sent += 1;
       else await batch(db, [recordLate(db, row.id, attempts, 'remis_apres_cloture', ref)]);
       await noticeExpired(deps, receipt);

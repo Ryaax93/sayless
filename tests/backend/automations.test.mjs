@@ -151,6 +151,8 @@ test('T04 assistant de l’environnement de test : étapes vérifiées, reprise 
     assert.match(after.text, /discord · salon commandes : en échec depuis le .*, 2 message\(s\), discord_404/);
     assert.match(after.text, /iPhone actifs : 1 ; dernier essai : \d\d\/\d\d \d\d:\d\d ; dernière réception constatée sur l’iPhone : \d\d\/\d\d \d\d:\d\d/);
     assert.doesNotMatch(after.text, /discord\.com|webhooks\//, 'aucune adresse de webhook');
+    assert.ok(readFileSync(join(cloudDir, 'sql.log'), 'utf8').split('\n').some((q) => /FROM delivery_health WHERE state = 'failing' AND retired_at IS NULL/.test(q)),
+      'après 0011 : ancien webhook remplacé exclu des pannes');
     const statements = readFileSync(join(cloudDir, 'sql.log'), 'utf8').trim().split('\n').filter(Boolean);
     assert.ok(statements.length >= 10 && statements.every((q) => /^SELECT /.test(q.trim())), 'aucune écriture');
     assert.ok(statements.every((q) => !/endpoint|p256dh|auth|payload|body/.test(q)), 'ni adresse, ni clé, ni contenu lu');

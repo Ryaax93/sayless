@@ -18,6 +18,9 @@ import { invariants } from './stock.mjs';
 import { markRestoredEmails, parisClock } from './notify.mjs';
 
 const internal = (name) => name.startsWith('sqlite_') || name.startsWith('_cf_') || name === 'd1_migrations';
+// Tables copiées sans leurs lignes : jeton VAPID (droit d'envoi de 12 h au plus, jamais dans une
+// sauvegarde). La table est recréée vide à la restauration ; le premier envoi en émet un nouveau.
+const SCHEMA_ONLY = new Set(['vapid_tokens']);
 const SCHEMA = `SELECT type, name, tbl_name, sql FROM sqlite_master
   WHERE sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, rowid`;
 // Tables sans lesquelles une restauration n'a pas de sens.
@@ -28,7 +31,7 @@ export async function dumpDatabase(db) {
   const names = (await db.prepare(SCHEMA).all()).results
     .filter((o) => o.type === 'table' && !internal(o.name)).map((o) => o.name);
   // Un seul lot : schéma + tables, image cohérente de la base à un instant donné.
-  const results = await db.batch([db.prepare(SCHEMA), ...names.map((n) => db.prepare(`SELECT * FROM "${n}"`))]);
+  const results = await db.batch([db.prepare(SCHEMA), ...names.map((n) => db.prepare(`SELECT * FROM "${n}"${SCHEMA_ONLY.has(n) ? ' WHERE 0' : ''}`))]);
   const objects = results[0].results.filter((o) => !internal(o.name) && !internal(o.tbl_name));
   const listed = objects.filter((o) => o.type === 'table').map((o) => o.name);
   if (listed.join('|') !== names.join('|')) throw new Error('schéma modifié pendant la sauvegarde');

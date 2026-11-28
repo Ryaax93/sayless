@@ -377,7 +377,10 @@ Appareils iPhone enregistrés : ${devices?.n ?? 0} (abonnement du ${when(devices
   // dernier essai iPhone, avec la réception constatée par l'iPhone lui-même.
   if (tables.has('delivery_health')) {
     say('\nDestinations en échec (salons Discord, iPhone, e-mails clients) :');
-    const failing = read(`SELECT channel, label, failures, last_error, since FROM delivery_health WHERE state = 'failing' ORDER BY channel, label`);
+    // Après 0011 : un ancien webhook Discord remplacé (destination retirée) n'est plus une panne.
+    const retired = read(`SELECT name FROM d1_migrations WHERE name = '0011_jeton_vapid_tentatives.sql'`).length > 0;
+    const failing = read(`SELECT channel, label, failures, last_error, since FROM delivery_health WHERE state = 'failing'
+      ${retired ? 'AND retired_at IS NULL' : ''} ORDER BY channel, label`);
     if (!failing.length) say('  aucune');
     for (const r of failing) say(`  ${r.channel} · ${r.label ?? 'destination'} : en échec depuis le ${when(r.since)}, ${r.failures} message(s), ${r.last_error}`);
     const [check] = read(`SELECT COUNT(*) AS n, MAX(test_sent_at) AS essai, MAX(received_at) AS recu FROM push_subscriptions WHERE expired_at IS NULL`);

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { bench, emptyDatabase, migrate, startDatabases, stopDatabases, T0 } from './helpers.mjs';
 import { studio } from './studio-helpers.mjs';
 import { ALERT_REPEAT, deliverOutbox } from '../../backend/src/notify.mjs';
-import { fingerprint, vapidAuthorization } from '../../backend/src/push.mjs';
+import { fingerprint, VAPID_LIFETIME, VAPID_REUSE, vapidAuthorization } from '../../backend/src/push.mjs';
 import { createContext, runScheduled } from '../../backend/src/routes.mjs';
 import { b64url, fromB64url } from '../../backend/src/lib.mjs';
 import { readFile } from 'node:fs/promises';
@@ -322,7 +322,7 @@ test('N07 clôture des envois échoués : Face ID, historique conservé, e-mails
   assert.equal(b.net.length, 0, 'aucun essai sur une ligne clôturée');
 });
 
-test('N08 migrations 0009 et 0010 sur une base en pleine boucle : rien de perdu, et plus aucune alerte en chaîne après la mise à jour', async () => {
+test('N08 migrations 0009, 0010 et 0011 sur une base en pleine boucle : rien de perdu, et plus aucune alerte en chaîne après la mise à jour', async () => {
   const real = await emptyDatabase();
   await migrate(real, ['0001_commerce.sql', '0003_decisions_fondateur.sql', '0004_studio_auth.sql', '0005_revue_work.sql',
     '0006_studio_ecrans.sql', '0007_intentions_cgv.sql', '0008_envois_rapprochement.sql']);
@@ -335,7 +335,7 @@ test('N08 migrations 0009 et 0010 sur une base en pleine boucle : rien de perdu,
     real.prepare(`INSERT INTO notifications (kind, ref, level, title, body, at) VALUES ('technical', 'outbox:1', 'critical', 'Notification non distribuée', 'x', ?)`).bind(T0),
   ]);
   const before = JSON.stringify([await real.prepare('SELECT * FROM outbox ORDER BY id').all(), await real.prepare('SELECT endpoint, p256dh, auth, failures FROM push_subscriptions').all()].map((r) => r.results));
-  await migrate(real, ['0009_notifications_fiables.sql', '0010_destinations_reception.sql']);
+  await migrate(real, ['0009_notifications_fiables.sql', '0010_destinations_reception.sql', '0011_jeton_vapid_tentatives.sql']);
   const after = JSON.stringify([await real.prepare('SELECT id, channel, dedupe, payload, status, attempts, next_at, at, first_attempt_at, last_attempt_at, uncertain_since, envelope, provider_ref, last_error, route FROM outbox ORDER BY id').all(),
     await real.prepare('SELECT endpoint, p256dh, auth, failures FROM push_subscriptions').all()].map((r) => r.results));
   assert.equal(after, before, 'lignes et colonnes existantes inchangées');
@@ -397,7 +397,7 @@ test('N10 tâche planifiée réelle : panne iPhone avec 40 messages en attente, 
 
 // ---------- Corrections du contre-audit de Work (28 novembre) : R1 à R5 ----------
 
-test('N11 jeton VAPID identique dans deux isolates workerd sans stockage partagé, en parallèle ; nouveau à l’heure suivante ou si la configuration change', async () => {
+test('N11 jeton VAPID partagé par D1 entre deux isolates workerd : même jeton à froid, en parallèle, de part et d’autre d’une heure pile, horloges décalées ; une seule rotation ; aucun jeton sans base', async () => {
   const { build } = await import('esbuild');
   const { Miniflare, convertV4MiniflareOptions } = await import('miniflare');
   // Chemin du système (Windows : « D:\… », pas « /D:/… »), sinon esbuild ne trouve pas le module.
@@ -405,28 +405,58 @@ test('N11 jeton VAPID identique dans deux isolates workerd sans stockage partag�
   const bundle = await build({ bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'], stdin: { resolveDir: root, loader: 'js',
     contents: `import { vapidAuthorization } from './backend/src/push.mjs';
       export default { async fetch(request, env) {
-        const { endpoint, now, n } = await request.json();
-        const tokens = await Promise.all(Array.from({ length: n }, () => vapidAuthorization(env, endpoint, now).catch((e) => 'erreur:' + e.message)));
+        const { endpoint, now, n, keys, base } = await request.json();
+        const target = { ...keys, ...(base ? { DB: env.DB } : {}) };
+        const tokens = await Promise.all(Array.from({ length: n }, () => vapidAuthorization(target, endpoint, now).catch((e) => 'erreur:' + (e.code ?? e.message))));
         return Response.json({ tokens });
       } };` } });
   const script = bundle.outputFiles[0].text;
-  const vapid = await vapidKeys();
-  const other = await vapidKeys();
-  const worker = (name, vars) => ({ name, modules: true, script, compatibilityDate: '2026-05-15', bindings: vars });
-  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [worker('a', vapid), worker('b', vapid),
-    worker('c', { ...vapid, VAPID_SUBJECT: 'mailto:sayless@example.invalid' }), worker('d', { ...vapid, VAPID_PRIVATE_KEY: other.VAPID_PRIVATE_KEY })] }));
+  // a et b : deux isolates (modules, caches et horloges distincts) liés à la même base D1, comme deux
+  // instances du Worker ; f : une base sans la table du jeton (base injoignable pour ce jeton).
+  const worker = (name, id) => ({ name, modules: true, script, compatibilityDate: '2026-05-15', d1Databases: { DB: id } });
+  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [worker('a', 'vapid-partagee'), worker('b', 'vapid-partagee'), worker('f', 'vapid-vide')] }));
   try {
-    const ask = async (name, now, n = 8) => (await (await (await mf.getWorker(name)).fetch('http://local/', { method: 'POST',
-      body: JSON.stringify({ endpoint: SECRET_ENDPOINT, now, n }) })).json()).tokens;
-    const hour = T0 + 3600 * 5;
-    const [a, b] = await Promise.all([ask('a', hour + 10), ask('b', hour + 3590)]);
-    assert.equal(new Set([...a, ...b]).size, 1, 'deux isolates, huit appels simultanés chacun : un seul jeton pendant l’heure');
-    assert.notEqual((await ask('a', hour + 3600, 1))[0], a[0], 'heure suivante : nouveau jeton');
-    assert.notEqual((await ask('c', hour + 10, 1))[0], a[0], 'autre sujet : autre jeton');
-    assert.match((await ask('d', hour + 10, 1))[0], /^erreur:paire de clés VAPID incohérente/, 'clé privée d’une autre paire : aucun jeton émis');
-    const [, jwt] = a[0].match(/^vapid t=([^,]+), k=/);
+    const shared = await mf.getD1Database('DB', 'a');
+    await migrate(shared);
+    const ask = async (name, now, keys, { n = 1, base = true } = {}) => (await (await (await mf.getWorker(name)).fetch('http://local/', { method: 'POST',
+      body: JSON.stringify({ endpoint: SECRET_ENDPOINT, now, n, keys, base }) })).json()).tokens;
+    const one = async (...a) => (await ask(...a))[0];
+    const rows = async () => (await shared.prepare('SELECT COUNT(*) AS n FROM vapid_tokens').first()).n;
+    const vapid = await vapidKeys();
+    const S = Math.floor(T0 / 3600) * 3600 + 5 * 3600 + 1800;
+    // Démarrages à froid simultanés, huit appels dans chaque isolate : un seul jeton.
+    const [a, b] = await Promise.all([ask('a', S, vapid, { n: 8 }), ask('b', S + 1, vapid, { n: 8 })]);
+    assert.equal(new Set([...a, ...b]).size, 1, 'deux isolates à froid, seize appels simultanés : un seul jeton');
+    const first = a[0];
+    assert.match(first, /^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=/);
+    // Réutilisé six heures, horloges décalées de cinq minutes dans les deux sens.
+    assert.deepEqual([await one('b', S + VAPID_REUSE - 1, vapid), await one('a', S + 300, vapid), await one('b', S - 300, vapid)], [first, first, first]);
+    // Rotation : une seule, même si les deux isolates la tentent au même moment.
+    const [ra, rb] = await Promise.all([ask('a', S + VAPID_REUSE + 1, vapid, { n: 8 }), ask('b', S + VAPID_REUSE + 2, vapid, { n: 8 })]);
+    assert.equal(new Set([...ra, ...rb]).size, 1, 'rotation concurrente : un seul nouveau jeton');
+    assert.notEqual(ra[0], first, 'nouveau jeton après six heures');
+    assert.deepEqual([await one('a', S + VAPID_REUSE + 600, vapid), await one('b', S + VAPID_REUSE + 600, vapid)], [ra[0], ra[0]]);
+    // De part et d’autre d’une heure pile (P2-R1, dans workerd) : même jeton.
+    const second = await vapidKeys();
+    const H = Math.floor(T0 / 3600) * 3600 + 20 * 3600;
+    assert.equal(await one('a', H - 1, second), await one('b', H + 1, second), 'heure pile entre deux isolates : même jeton');
+    // Autre configuration : autre jeton ; paire incohérente : aucun jeton, rien d’enregistré.
+    assert.notEqual(await one('a', S + 10, { ...vapid, VAPID_SUBJECT: 'mailto:sayless@example.invalid' }), first);
+    const before = await rows();
+    const mismatched = { ...(await vapidKeys()), VAPID_PRIVATE_KEY: (await vapidKeys()).VAPID_PRIVATE_KEY };
+    assert.equal(await one('a', S, mismatched), 'erreur:vapid_cle_invalide', 'clé privée d’une autre paire : aucun jeton émis');
+    assert.equal(await rows(), before, 'rien d’enregistré pour une paire incohérente');
+    // Sans base, ou base injoignable pour le jeton : aucun jeton, jamais de jeton non coordonné.
+    assert.equal(await one('a', S, await vapidKeys(), { base: false }), 'erreur:vapid_sans_base');
+    assert.equal(await one('f', S, await vapidKeys()), 'erreur:vapid_base_indisponible');
+    // Jeton enregistré = jeton rendu ; signature vérifiée par OpenSSL ; validité 12 h depuis l’émission.
+    const stored = await shared.prepare('SELECT token, issued_at, expires_at FROM vapid_tokens ORDER BY issued_at LIMIT 1').first();
+    const [, jwt] = ra[0].match(/^vapid t=([^,]+), k=/);
+    const row = await shared.prepare('SELECT token, issued_at, expires_at FROM vapid_tokens WHERE token = ?').bind(jwt).first();
+    assert.ok(row && stored, 'jeton rendu = jeton de la base');
     const [header, claims, signature] = jwt.split('.');
-    assert.deepEqual(JSON.parse(Buffer.from(claims, 'base64url')), { aud: 'https://web.push.apple.com', exp: hour + 43200, sub: vapid.VAPID_SUBJECT });
+    assert.deepEqual(JSON.parse(Buffer.from(claims, 'base64url')), { aud: 'https://web.push.apple.com', exp: row.issued_at + VAPID_LIFETIME, sub: vapid.VAPID_SUBJECT });
+    assert.equal(row.expires_at, row.issued_at + VAPID_LIFETIME);
     const { createPublicKey, verify } = await import('node:crypto');
     const pub = fromB64url(vapid.VAPID_PUBLIC_KEY);
     const key = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64url(pub.slice(1, 33)), y: b64url(pub.slice(33)) }, format: 'jwk' });
@@ -436,24 +466,25 @@ test('N11 jeton VAPID identique dans deux isolates workerd sans stockage partag�
   }
 });
 
-test('N12 signature déterministe conforme : vecteurs officiels de la RFC 6979 (P-256, SHA-256) et vérification croisée OpenSSL', async () => {
-  const { signDeterministic } = await import('../../backend/src/es256.mjs');
+test('N12 signature native Web Crypto : aucune arithmétique sur une clé secrète dans le code ; quarante jetons de clés différentes vérifiés par OpenSSL', async () => {
+  const { readFile: read, readdir } = await import('node:fs/promises');
+  const src = fileURLToPath(new URL('../../backend/src/', import.meta.url));
+  assert.ok(!(await readdir(src)).includes('es256.mjs'), 'module de signature maison retiré');
+  const push = await read(new URL('../../backend/src/push.mjs', import.meta.url), 'utf8');
+  assert.match(push, /crypto\.subtle\.sign\(\{ name: 'ECDSA', hash: 'SHA-256' \}/);
+  assert.doesNotMatch(push, /BigInt|\b0x[0-9a-f]{16,}n\b/i, 'aucun calcul en grands entiers');
   const { createPublicKey, verify } = await import('node:crypto');
-  const d = Buffer.from('C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721', 'hex');
-  const vectors = { sample: ['EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716', 'F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8'],
-    test: ['F1ABB023518351CD71D881567B1EA663ED3EFCF6C5132B354F28D3B0B7D38367', '019F4113742A2B14BD25926B49C649155F267E60D3814B4C0CC84250E46F0083'] };
-  for (const [message, [r, s]] of Object.entries(vectors)) {
-    const sig = Buffer.from(await signDeterministic(d, new TextEncoder().encode(message)));
-    assert.deepEqual([sig.subarray(0, 32).toString('hex').toUpperCase(), sig.subarray(32).toString('hex').toUpperCase()], [r, s], `RFC 6979 A.2.5, « ${message} »`);
-  }
+  const b = await bench();
   for (let i = 0; i < 40; i += 1) {
-    const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-    const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
-    const message = crypto.getRandomValues(new Uint8Array(20 + i));
-    const sig = await signDeterministic(Buffer.from(jwk.d, 'base64url'), message);
-    const pub = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' });
-    assert.equal(verify('sha256', message, { key: pub, dsaEncoding: 'ieee-p1363' }, sig), true);
-    assert.deepEqual(await signDeterministic(Buffer.from(jwk.d, 'base64url'), message), sig, 'même message, même signature');
+    const keys = await vapidKeys();
+    const authorization = await vapidAuthorization({ ...keys, DB: b.env.DB }, SECRET_ENDPOINT, T0 + i);
+    const [, jwt, k] = authorization.match(/^vapid t=([^,]+), k=(.+)$/);
+    assert.equal(k, keys.VAPID_PUBLIC_KEY);
+    const [header, claims, signature] = jwt.split('.');
+    const pub = fromB64url(keys.VAPID_PUBLIC_KEY);
+    const key = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: b64url(pub.slice(1, 33)), y: b64url(pub.slice(33)) }, format: 'jwk' });
+    assert.equal(verify('sha256', Buffer.from(`${header}.${claims}`), { key, dsaEncoding: 'ieee-p1363' }, Buffer.from(signature, 'base64url')), true);
+    assert.equal(JSON.parse(Buffer.from(claims, 'base64url')).exp, T0 + i + VAPID_LIFETIME);
   }
 });
 
